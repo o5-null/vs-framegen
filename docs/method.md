@@ -59,7 +59,7 @@ smv-live.exe --offline --w W --h H --multi 2 --frames 40 --pixfmt rgb24 <flag>
 
 ### RIFE 四变体（TensorRT）
 
-`src/rife_trt.py` 用 `test\trt_rife422.py` 的 `build_engine` + `TrtRunner`：
+`src/rife_trt.py` 用 `src/trt_runner.py` 的 `build_engine` + `TrtRunner`：
 
 ```
 [1, 11, Hp, Wp]  fp16  →  NCHW 输入，裁出 [0:3] 为 RGB 输出

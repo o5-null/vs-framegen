@@ -3,7 +3,7 @@
 The 40 source frames are consecutive, so frame 2, 4, ... are the true frames between
 their neighbours. Feeding the 20 odd frames to a 2x interpolator therefore returns
 19 tweens that each have real ground truth (the same construction as
-test/vd_common.triplets). Output goes to 测试数据\\engines\\quality\\frames\\<engine>\\<gt>.png
+triplets() below). Output goes to VFI_DATA\\quality\\frames\\<engine>\\<gt>.png
 so the metrics pass is a cheap re-run.
 
 Usage: python run_quality.py [--force] [engine ...]

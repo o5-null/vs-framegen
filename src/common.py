@@ -125,7 +125,7 @@ def source_frames(w, h, count=40):
 
 def odd_frames(w, h):
     """The 20 odd-indexed frames: interpolating between neighbours gives the even ones back,
-    so every generated tween has a real ground-truth frame (this is test/vd_common.triplets)."""
+    so every generated tween has a real ground-truth frame (this is triplets() below)."""
     names = png_names()
     return [load_frame(names[2 * k], w, h) for k in range(20)], names
 
