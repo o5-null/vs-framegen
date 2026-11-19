@@ -1,0 +1,1335 @@
+{
+ "meta": {
+  "frames": 40,
+  "passes": 5,
+  "multi": 2,
+  "stat": "min"
+ },
+ "runs": [
+  {
+   "engine": "dlssg",
+   "res": "w480",
+   "w": 480,
+   "h": 270,
+   "ms_per_pair": 1.74,
+   "samples": [
+    1.98,
+    1.83,
+    1.74,
+    1.8,
+    1.81
+   ],
+   "host": "smv-live --offline"
+  },
+  {
+   "engine": "xess",
+   "res": "w480",
+   "w": 480,
+   "h": 270,
+   "ms_per_pair": 5.08,
+   "samples": [
+    5.4,
+    5.31,
+    5.25,
+    5.1,
+    5.08
+   ],
+   "host": "smv-live --offline"
+  },
+  {
+   "engine": "vfg",
+   "res": "w480",
+   "w": 480,
+   "h": 270,
+   "ms_per_pair": 5.55,
+   "samples": [
+    5.93,
+    5.58,
+    5.58,
+    5.55,
+    5.95
+   ],
+   "host": "smv-live --offline"
+  },
+  {
+   "engine": "fsr4",
+   "res": "w480",
+   "w": 480,
+   "h": 270,
+   "ms_per_pair": 4.55,
+   "samples": [
+    4.55,
+    4.74,
+    4.96,
+    4.9,
+    4.9
+   ],
+   "host": "smv-live --offline"
+  },
+  {
+   "engine": "dlssg",
+   "res": "w640",
+   "w": 640,
+   "h": 360,
+   "ms_per_pair": 2.04,
+   "samples": [
+    2.08,
+    2.04,
+    2.18,
+    2.11,
+    2.07
+   ],
+   "host": "smv-live --offline"
+  },
+  {
+   "engine": "xess",
+   "res": "w640",
+   "w": 640,
+   "h": 360,
+   "ms_per_pair": 6.8,
+   "samples": [
+    7.01,
+    6.8,
+    6.84,
+    7.02,
+    7.13
+   ],
+   "host": "smv-live --offline"
+  },
+  {
+   "engine": "vfg",
+   "res": "w640",
+   "w": 640,
+   "h": 360,
+   "ms_per_pair": 8.4,
+   "samples": [
+    8.82,
+    8.49,
+    8.4,
+    8.42,
+    8.5
+   ],
+   "host": "smv-live --offline"
+  },
+  {
+   "engine": "fsr4",
+   "res": "w640",
+   "w": 640,
+   "h": 360,
+   "ms_per_pair": 6.32,
+   "samples": [
+    6.32,
+    6.82,
+    6.73,
+    6.82,
+    6.74
+   ],
+   "host": "smv-live --offline"
+  },
+  {
+   "engine": "dlssg",
+   "res": "w800",
+   "w": 800,
+   "h": 450,
+   "ms_per_pair": 2.31,
+   "samples": [
+    2.31,
+    2.36,
+    2.44,
+    2.36,
+    2.43
+   ],
+   "host": "smv-live --offline"
+  },
+  {
+   "engine": "xess",
+   "res": "w800",
+   "w": 800,
+   "h": 450,
+   "ms_per_pair": 8.37,
+   "samples": [
+    8.89,
+    8.62,
+    8.37,
+    8.86,
+    9.09
+   ],
+   "host": "smv-live --offline"
+  },
+  {
+   "engine": "fsr4",
+   "res": "w800",
+   "w": 800,
+   "h": 450,
+   "ms_per_pair": 8.37,
+   "samples": [
+    8.39,
+    8.98,
+    8.62,
+    8.37,
+    8.63
+   ],
+   "host": "smv-live --offline"
+  },
+  {
+   "engine": "dlssg",
+   "res": "w960",
+   "w": 960,
+   "h": 540,
+   "ms_per_pair": 2.73,
+   "samples": [
+    2.84,
+    2.77,
+    3.05,
+    2.73,
+    2.81
+   ],
+   "host": "smv-live --offline"
+  },
+  {
+   "engine": "xess",
+   "res": "w960",
+   "w": 960,
+   "h": 540,
+   "ms_per_pair": 11.03,
+   "samples": [
+    11.78,
+    11.03,
+    11.07,
+    11.41,
+    11.15
+   ],
+   "host": "smv-live --offline"
+  },
+  {
+   "engine": "vfg",
+   "res": "w960",
+   "w": 960,
+   "h": 540,
+   "ms_per_pair": 17.97,
+   "samples": [
+    18.48,
+    18.12,
+    18.02,
+    18.1,
+    17.97
+   ],
+   "host": "smv-live --offline"
+  },
+  {
+   "engine": "fsr4",
+   "res": "w960",
+   "w": 960,
+   "h": 540,
+   "ms_per_pair": 11.22,
+   "samples": [
+    11.22,
+    11.25,
+    11.31,
+    11.33,
+    11.3
+   ],
+   "host": "smv-live --offline"
+  },
+  {
+   "engine": "dlssg",
+   "res": "720p",
+   "w": 1280,
+   "h": 720,
+   "ms_per_pair": 4.15,
+   "samples": [
+    4.41,
+    4.15,
+    4.17,
+    4.31,
+    4.35
+   ],
+   "host": "smv-live --offline"
+  },
+  {
+   "engine": "xess",
+   "res": "720p",
+   "w": 1280,
+   "h": 720,
+   "ms_per_pair": 17.68,
+   "samples": [
+    17.68,
+    17.85,
+    17.69,
+    17.71,
+    17.77
+   ],
+   "host": "smv-live --offline"
+  },
+  {
+   "engine": "fsr4",
+   "res": "720p",
+   "w": 1280,
+   "h": 720,
+   "ms_per_pair": 17.99,
+   "samples": [
+    18.05,
+    18.1,
+    17.99,
+    17.99,
+    18.14
+   ],
+   "host": "smv-live --offline"
+  },
+  {
+   "engine": "dlssg",
+   "res": "w1600",
+   "w": 1600,
+   "h": 900,
+   "ms_per_pair": 6.0,
+   "samples": [
+    6.45,
+    6.0,
+    6.55,
+    6.07,
+    6.62
+   ],
+   "host": "smv-live --offline"
+  },
+  {
+   "engine": "xess",
+   "res": "w1600",
+   "w": 1600,
+   "h": 900,
+   "ms_per_pair": 26.44,
+   "samples": [
+    27.04,
+    26.44,
+    26.45,
+    26.46,
+    26.49
+   ],
+   "host": "smv-live --offline"
+  },
+  {
+   "engine": "fsr4",
+   "res": "w1600",
+   "w": 1600,
+   "h": 900,
+   "ms_per_pair": 26.98,
+   "samples": [
+    26.98,
+    27.09,
+    27.09,
+    27.06,
+    27.07
+   ],
+   "host": "smv-live --offline"
+  },
+  {
+   "engine": "dlssg",
+   "res": "1080p",
+   "w": 1920,
+   "h": 1080,
+   "ms_per_pair": 8.0,
+   "samples": [
+    9.69,
+    8.0,
+    8.65,
+    8.36,
+    8.7
+   ],
+   "host": "smv-live --offline"
+  },
+  {
+   "engine": "xess",
+   "res": "1080p",
+   "w": 1920,
+   "h": 1080,
+   "ms_per_pair": 37.63,
+   "samples": [
+    37.91,
+    37.9,
+    37.75,
+    37.67,
+    37.63
+   ],
+   "host": "smv-live --offline"
+  },
+  {
+   "engine": "vfg",
+   "res": "1080p",
+   "w": 1920,
+   "h": 1080,
+   "ms_per_pair": 19.77,
+   "samples": [
+    19.77,
+    19.79,
+    19.88,
+    19.84,
+    20.14
+   ],
+   "host": "smv-live --offline"
+  },
+  {
+   "engine": "fsr4",
+   "res": "1080p",
+   "w": 1920,
+   "h": 1080,
+   "ms_per_pair": 38.19,
+   "samples": [
+    38.22,
+    38.25,
+    38.27,
+    38.21,
+    38.19
+   ],
+   "host": "smv-live --offline"
+  },
+  {
+   "engine": "dlssg",
+   "res": "w2240",
+   "w": 2240,
+   "h": 1260,
+   "ms_per_pair": 11.07,
+   "samples": [
+    12.62,
+    11.4,
+    13.1,
+    11.24,
+    11.07
+   ],
+   "host": "smv-live --offline"
+  },
+  {
+   "engine": "xess",
+   "res": "w2240",
+   "w": 2240,
+   "h": 1260,
+   "ms_per_pair": 50.0,
+   "samples": [
+    50.04,
+    50.09,
+    50.05,
+    50.08,
+    50.0
+   ],
+   "host": "smv-live --offline"
+  },
+  {
+   "engine": "fsr4",
+   "res": "w2240",
+   "w": 2240,
+   "h": 1260,
+   "ms_per_pair": 50.95,
+   "samples": [
+    51.13,
+    51.02,
+    50.95,
+    51.2,
+    50.99
+   ],
+   "host": "smv-live --offline"
+  },
+  {
+   "engine": "dlssg",
+   "res": "1440p",
+   "w": 2560,
+   "h": 1440,
+   "ms_per_pair": 13.63,
+   "samples": [
+    16.7,
+    13.63,
+    14.41,
+    13.71,
+    13.64
+   ],
+   "host": "smv-live --offline"
+  },
+  {
+   "engine": "xess",
+   "res": "1440p",
+   "w": 2560,
+   "h": 1440,
+   "ms_per_pair": 64.38,
+   "samples": [
+    64.73,
+    64.49,
+    64.38,
+    64.47,
+    64.61
+   ],
+   "host": "smv-live --offline"
+  },
+  {
+   "engine": "vfg",
+   "res": "1440p",
+   "w": 2560,
+   "h": 1440,
+   "ms_per_pair": 20.82,
+   "samples": [
+    20.99,
+    20.85,
+    20.82,
+    20.92,
+    21.28
+   ],
+   "host": "smv-live --offline"
+  },
+  {
+   "engine": "fsr4",
+   "res": "1440p",
+   "w": 2560,
+   "h": 1440,
+   "ms_per_pair": 65.5,
+   "samples": [
+    65.5,
+    65.54,
+    65.7,
+    65.57,
+    66.16
+   ],
+   "host": "smv-live --offline"
+  },
+  {
+   "engine": "dlssg",
+   "res": "w3200",
+   "w": 3200,
+   "h": 1800,
+   "ms_per_pair": 21.37,
+   "samples": [
+    25.73,
+    21.37,
+    21.96,
+    21.55,
+    21.37
+   ],
+   "host": "smv-live --offline"
+  },
+  {
+   "engine": "xess",
+   "res": "w3200",
+   "w": 3200,
+   "h": 1800,
+   "ms_per_pair": 99.48,
+   "samples": [
+    99.55,
+    99.5,
+    99.5,
+    99.48,
+    99.61
+   ],
+   "host": "smv-live --offline"
+  },
+  {
+   "engine": "vfg",
+   "res": "w3200",
+   "w": 3200,
+   "h": 1800,
+   "ms_per_pair": 22.0,
+   "samples": [
+    22.09,
+    22.39,
+    22.0,
+    22.05,
+    22.14
+   ],
+   "host": "smv-live --offline"
+  },
+  {
+   "engine": "fsr4",
+   "res": "w3200",
+   "w": 3200,
+   "h": 1800,
+   "ms_per_pair": 101.06,
+   "samples": [
+    101.16,
+    101.19,
+    101.19,
+    101.06,
+    101.2
+   ],
+   "host": "smv-live --offline"
+  },
+  {
+   "engine": "dlssg",
+   "res": "4k",
+   "w": 3840,
+   "h": 2160,
+   "ms_per_pair": 29.38,
+   "samples": [
+    36.34,
+    29.38,
+    30.44,
+    30.45,
+    31.24
+   ],
+   "host": "smv-live --offline"
+  },
+  {
+   "engine": "xess",
+   "res": "4k",
+   "w": 3840,
+   "h": 2160,
+   "ms_per_pair": 142.13,
+   "samples": [
+    143.09,
+    142.13,
+    142.2,
+    142.27,
+    142.22
+   ],
+   "host": "smv-live --offline"
+  },
+  {
+   "engine": "fsr4",
+   "res": "4k",
+   "w": 3840,
+   "h": 2160,
+   "ms_per_pair": 143.98,
+   "samples": [
+    144.32,
+    144.26,
+    143.98,
+    144.13,
+    144.07
+   ],
+   "host": "smv-live --offline"
+  },
+  {
+   "engine": "vfg",
+   "res": "w800",
+   "w": 800,
+   "h": 450,
+   "ms_per_pair": 14.04,
+   "samples": [
+    14.91,
+    14.09,
+    14.04,
+    14.28,
+    14.24
+   ],
+   "attempts": 5,
+   "host": "smv-live --offline"
+  },
+  {
+   "engine": "vfg",
+   "res": "720p",
+   "w": 1280,
+   "h": 720,
+   "ms_per_pair": 18.36,
+   "samples": [
+    19.51,
+    19.07,
+    18.74,
+    18.36,
+    18.86
+   ],
+   "attempts": 5,
+   "host": "smv-live --offline"
+  },
+  {
+   "engine": "vfg",
+   "res": "w1600",
+   "w": 1600,
+   "h": 900,
+   "ms_per_pair": 18.63,
+   "samples": [
+    19.39,
+    19.18,
+    18.7,
+    18.67,
+    18.63
+   ],
+   "attempts": 5,
+   "host": "smv-live --offline"
+  },
+  {
+   "engine": "vfg",
+   "res": "w2240",
+   "w": 2240,
+   "h": 1260,
+   "ms_per_pair": 19.29,
+   "samples": [
+    20.22,
+    19.68,
+    20.38,
+    19.29,
+    19.3
+   ],
+   "attempts": 5,
+   "host": "smv-live --offline"
+  },
+  {
+   "engine": "vfg",
+   "res": "4k",
+   "w": 3840,
+   "h": 2160,
+   "ms_per_pair": 22.63,
+   "samples": [
+    23.05,
+    22.98,
+    22.63,
+    22.92,
+    22.69
+   ],
+   "attempts": 6,
+   "host": "smv-live --offline"
+  },
+  {
+   "engine": "rife4.6",
+   "res": "w480",
+   "w": 480,
+   "h": 270,
+   "ms_per_pair": 1.76,
+   "ms_gpu": 1.284,
+   "samples": [
+    2.037,
+    1.76,
+    2.071
+   ],
+   "load_s": 0.2,
+   "host": "TensorRT fp16"
+  },
+  {
+   "engine": "rife4.25lite",
+   "res": "w480",
+   "w": 480,
+   "h": 270,
+   "ms_per_pair": 2.43,
+   "ms_gpu": 1.787,
+   "samples": [
+    2.816,
+    2.809,
+    2.43
+   ],
+   "load_s": 0.0,
+   "host": "TensorRT fp16"
+  },
+  {
+   "engine": "rife4.26",
+   "res": "w480",
+   "w": 480,
+   "h": 270,
+   "ms_per_pair": 2.856,
+   "ms_gpu": 2.275,
+   "samples": [
+    2.907,
+    2.872,
+    2.856
+   ],
+   "load_s": 0.0,
+   "host": "TensorRT fp16"
+  },
+  {
+   "engine": "rife4.26heavy",
+   "res": "w480",
+   "w": 480,
+   "h": 270,
+   "ms_per_pair": 3.121,
+   "ms_gpu": 2.578,
+   "samples": [
+    3.194,
+    3.121,
+    3.166
+   ],
+   "load_s": 0.0,
+   "host": "TensorRT fp16"
+  },
+  {
+   "engine": "rife4.6",
+   "res": "w640",
+   "w": 640,
+   "h": 360,
+   "ms_per_pair": 2.342,
+   "ms_gpu": 1.6,
+   "samples": [
+    2.414,
+    2.818,
+    2.342
+   ],
+   "load_s": 0.0,
+   "host": "TensorRT fp16"
+  },
+  {
+   "engine": "rife4.25lite",
+   "res": "w640",
+   "w": 640,
+   "h": 360,
+   "ms_per_pair": 2.697,
+   "ms_gpu": 1.897,
+   "samples": [
+    2.843,
+    3.945,
+    2.697
+   ],
+   "load_s": 0.0,
+   "host": "TensorRT fp16"
+  },
+  {
+   "engine": "rife4.26",
+   "res": "w640",
+   "w": 640,
+   "h": 360,
+   "ms_per_pair": 3.135,
+   "ms_gpu": 2.281,
+   "samples": [
+    3.423,
+    4.423,
+    3.135
+   ],
+   "load_s": 0.0,
+   "host": "TensorRT fp16"
+  },
+  {
+   "engine": "rife4.26heavy",
+   "res": "w640",
+   "w": 640,
+   "h": 360,
+   "ms_per_pair": 4.155,
+   "ms_gpu": 3.401,
+   "samples": [
+    4.404,
+    5.446,
+    4.155
+   ],
+   "load_s": 0.0,
+   "host": "TensorRT fp16"
+  },
+  {
+   "engine": "rife4.6",
+   "res": "w800",
+   "w": 800,
+   "h": 450,
+   "ms_per_pair": 3.096,
+   "ms_gpu": 1.981,
+   "samples": [
+    5.128,
+    3.096,
+    3.159
+   ],
+   "load_s": 0.0,
+   "host": "TensorRT fp16"
+  },
+  {
+   "engine": "rife4.25lite",
+   "res": "w800",
+   "w": 800,
+   "h": 450,
+   "ms_per_pair": 4.234,
+   "ms_gpu": 3.014,
+   "samples": [
+    6.905,
+    4.234,
+    4.353
+   ],
+   "load_s": 0.1,
+   "host": "TensorRT fp16"
+  },
+  {
+   "engine": "rife4.26",
+   "res": "w800",
+   "w": 800,
+   "h": 450,
+   "ms_per_pair": 5.027,
+   "ms_gpu": 3.81,
+   "samples": [
+    7.848,
+    5.036,
+    5.027
+   ],
+   "load_s": 0.0,
+   "host": "TensorRT fp16"
+  },
+  {
+   "engine": "rife4.26heavy",
+   "res": "w800",
+   "w": 800,
+   "h": 450,
+   "ms_per_pair": 6.805,
+   "ms_gpu": 5.623,
+   "samples": [
+    7.771,
+    6.805,
+    6.884
+   ],
+   "load_s": 0.0,
+   "host": "TensorRT fp16"
+  },
+  {
+   "engine": "rife4.6",
+   "res": "w960",
+   "w": 960,
+   "h": 540,
+   "ms_per_pair": 3.661,
+   "ms_gpu": 2.189,
+   "samples": [
+    5.751,
+    3.967,
+    3.661
+   ],
+   "load_s": 0.0,
+   "host": "TensorRT fp16"
+  },
+  {
+   "engine": "rife4.25lite",
+   "res": "w960",
+   "w": 960,
+   "h": 540,
+   "ms_per_pair": 5.644,
+   "ms_gpu": 3.879,
+   "samples": [
+    9.224,
+    5.73,
+    5.644
+   ],
+   "load_s": 0.0,
+   "host": "TensorRT fp16"
+  },
+  {
+   "engine": "rife4.26",
+   "res": "w960",
+   "w": 960,
+   "h": 540,
+   "ms_per_pair": 6.704,
+   "ms_gpu": 5.183,
+   "samples": [
+    9.362,
+    7.287,
+    6.704
+   ],
+   "load_s": 0.0,
+   "host": "TensorRT fp16"
+  },
+  {
+   "engine": "rife4.26heavy",
+   "res": "w960",
+   "w": 960,
+   "h": 540,
+   "ms_per_pair": 8.83,
+   "ms_gpu": 7.347,
+   "samples": [
+    9.929,
+    9.285,
+    8.83
+   ],
+   "load_s": 0.1,
+   "host": "TensorRT fp16"
+  },
+  {
+   "engine": "rife4.6",
+   "res": "720p",
+   "w": 1280,
+   "h": 720,
+   "ms_per_pair": 7.191,
+   "ms_gpu": 4.592,
+   "samples": [
+    9.365,
+    7.191,
+    7.699
+   ],
+   "load_s": 0.0,
+   "host": "TensorRT fp16"
+  },
+  {
+   "engine": "rife4.25lite",
+   "res": "720p",
+   "w": 1280,
+   "h": 720,
+   "ms_per_pair": 11.788,
+   "ms_gpu": 8.884,
+   "samples": [
+    13.123,
+    11.788,
+    12.07
+   ],
+   "load_s": 0.1,
+   "host": "TensorRT fp16"
+  },
+  {
+   "engine": "rife4.26",
+   "res": "720p",
+   "w": 1280,
+   "h": 720,
+   "ms_per_pair": 14.549,
+   "ms_gpu": 11.605,
+   "samples": [
+    16.222,
+    15.405,
+    14.549
+   ],
+   "load_s": 0.1,
+   "host": "TensorRT fp16"
+  },
+  {
+   "engine": "rife4.26heavy",
+   "res": "720p",
+   "w": 1280,
+   "h": 720,
+   "ms_per_pair": 14.141,
+   "ms_gpu": 11.274,
+   "samples": [
+    14.868,
+    14.875,
+    14.141
+   ],
+   "load_s": 0.1,
+   "host": "TensorRT fp16"
+  },
+  {
+   "engine": "rife4.6",
+   "res": "w1600",
+   "w": 1600,
+   "h": 900,
+   "ms_per_pair": 11.054,
+   "ms_gpu": 6.941,
+   "samples": [
+    14.689,
+    11.054,
+    11.858
+   ],
+   "load_s": 0.0,
+   "host": "TensorRT fp16"
+  },
+  {
+   "engine": "rife4.25lite",
+   "res": "w1600",
+   "w": 1600,
+   "h": 900,
+   "ms_per_pair": 20.918,
+   "ms_gpu": 16.229,
+   "samples": [
+    22.903,
+    20.972,
+    20.918
+   ],
+   "load_s": 0.1,
+   "host": "TensorRT fp16"
+  },
+  {
+   "engine": "rife4.26",
+   "res": "w1600",
+   "w": 1600,
+   "h": 900,
+   "ms_per_pair": 21.517,
+   "ms_gpu": 17.217,
+   "samples": [
+    23.272,
+    22.205,
+    21.517
+   ],
+   "load_s": 0.1,
+   "host": "TensorRT fp16"
+  },
+  {
+   "engine": "rife4.26heavy",
+   "res": "w1600",
+   "w": 1600,
+   "h": 900,
+   "ms_per_pair": 21.872,
+   "ms_gpu": 17.468,
+   "samples": [
+    22.687,
+    21.872,
+    22.079
+   ],
+   "load_s": 0.1,
+   "host": "TensorRT fp16"
+  },
+  {
+   "engine": "rife4.6",
+   "res": "1080p",
+   "w": 1920,
+   "h": 1080,
+   "ms_per_pair": 16.195,
+   "ms_gpu": 10.697,
+   "samples": [
+    17.033,
+    16.195,
+    17.675
+   ],
+   "load_s": 0.0,
+   "host": "TensorRT fp16"
+  },
+  {
+   "engine": "rife4.25lite",
+   "res": "1080p",
+   "w": 1920,
+   "h": 1080,
+   "ms_per_pair": 31.424,
+   "ms_gpu": 25.432,
+   "samples": [
+    33.105,
+    31.424,
+    31.999
+   ],
+   "load_s": 0.1,
+   "host": "TensorRT fp16"
+  },
+  {
+   "engine": "rife4.26",
+   "res": "1080p",
+   "w": 1920,
+   "h": 1080,
+   "ms_per_pair": 37.785,
+   "ms_gpu": 32.125,
+   "samples": [
+    38.293,
+    37.785,
+    37.815
+   ],
+   "load_s": 0.1,
+   "host": "TensorRT fp16"
+  },
+  {
+   "engine": "rife4.26heavy",
+   "res": "1080p",
+   "w": 1920,
+   "h": 1080,
+   "ms_per_pair": 37.34,
+   "ms_gpu": 31.825,
+   "samples": [
+    37.55,
+    38.201,
+    37.34
+   ],
+   "load_s": 0.1,
+   "host": "TensorRT fp16"
+  },
+  {
+   "engine": "rife4.6",
+   "res": "w2240",
+   "w": 2240,
+   "h": 1260,
+   "ms_per_pair": 23.053,
+   "ms_gpu": 15.582,
+   "samples": [
+    23.053,
+    23.51,
+    25.523
+   ],
+   "load_s": 0.0,
+   "host": "TensorRT fp16"
+  },
+  {
+   "engine": "rife4.25lite",
+   "res": "w2240",
+   "w": 2240,
+   "h": 1260,
+   "ms_per_pair": 36.572,
+   "ms_gpu": 28.467,
+   "samples": [
+    37.666,
+    36.67,
+    36.572
+   ],
+   "load_s": 0.1,
+   "host": "TensorRT fp16"
+  },
+  {
+   "engine": "rife4.26",
+   "res": "w2240",
+   "w": 2240,
+   "h": 1260,
+   "ms_per_pair": 41.215,
+   "ms_gpu": 33.914,
+   "samples": [
+    42.022,
+    41.215,
+    41.907
+   ],
+   "load_s": 0.1,
+   "host": "TensorRT fp16"
+  },
+  {
+   "engine": "rife4.26heavy",
+   "res": "w2240",
+   "w": 2240,
+   "h": 1260,
+   "ms_per_pair": 39.682,
+   "ms_gpu": 31.935,
+   "samples": [
+    40.147,
+    39.682,
+    39.956
+   ],
+   "load_s": 0.1,
+   "host": "TensorRT fp16"
+  },
+  {
+   "engine": "rife4.6",
+   "res": "1440p",
+   "w": 2560,
+   "h": 1440,
+   "ms_per_pair": 25.492,
+   "ms_gpu": 16.142,
+   "samples": [
+    26.98,
+    25.492,
+    25.961
+   ],
+   "load_s": 0.1,
+   "host": "TensorRT fp16"
+  },
+  {
+   "engine": "rife4.25lite",
+   "res": "1440p",
+   "w": 2560,
+   "h": 1440,
+   "ms_per_pair": 38.929,
+   "ms_gpu": 28.471,
+   "samples": [
+    38.929,
+    40.03,
+    39.944
+   ],
+   "load_s": 0.1,
+   "host": "TensorRT fp16"
+  },
+  {
+   "engine": "rife4.26",
+   "res": "1440p",
+   "w": 2560,
+   "h": 1440,
+   "ms_per_pair": 37.993,
+   "ms_gpu": 28.124,
+   "samples": [
+    39.538,
+    37.993,
+    38.85
+   ],
+   "load_s": 0.1,
+   "host": "TensorRT fp16"
+  },
+  {
+   "engine": "rife4.26heavy",
+   "res": "1440p",
+   "w": 2560,
+   "h": 1440,
+   "ms_per_pair": 49.941,
+   "ms_gpu": 40.121,
+   "samples": [
+    50.571,
+    49.941,
+    50.762
+   ],
+   "load_s": 0.1,
+   "host": "TensorRT fp16"
+  },
+  {
+   "engine": "rife4.6",
+   "res": "w3200",
+   "w": 3200,
+   "h": 1800,
+   "ms_per_pair": 48.865,
+   "ms_gpu": 33.179,
+   "samples": [
+    48.865,
+    54.662,
+    53.629
+   ],
+   "load_s": 0.0,
+   "host": "TensorRT fp16"
+  },
+  {
+   "engine": "rife4.25lite",
+   "res": "w3200",
+   "w": 3200,
+   "h": 1800,
+   "ms_per_pair": 66.765,
+   "ms_gpu": 50.131,
+   "samples": [
+    71.922,
+    66.765,
+    69.635
+   ],
+   "load_s": 0.1,
+   "host": "TensorRT fp16"
+  },
+  {
+   "engine": "rife4.26",
+   "res": "w3200",
+   "w": 3200,
+   "h": 1800,
+   "ms_per_pair": 74.14,
+   "ms_gpu": 58.719,
+   "samples": [
+    74.14,
+    78.877,
+    78.53
+   ],
+   "load_s": 0.1,
+   "host": "TensorRT fp16"
+  },
+  {
+   "engine": "rife4.26heavy",
+   "res": "w3200",
+   "w": 3200,
+   "h": 1800,
+   "ms_per_pair": 105.282,
+   "ms_gpu": 90.129,
+   "samples": [
+    111.555,
+    107.564,
+    105.282
+   ],
+   "load_s": 0.3,
+   "host": "TensorRT fp16"
+  },
+  {
+   "engine": "rife4.6",
+   "res": "4k",
+   "w": 3840,
+   "h": 2160,
+   "ms_per_pair": 69.974,
+   "ms_gpu": 47.462,
+   "samples": [
+    72.128,
+    71.159,
+    69.974
+   ],
+   "load_s": 0.1,
+   "host": "TensorRT fp16"
+  },
+  {
+   "engine": "rife4.25lite",
+   "res": "4k",
+   "w": 3840,
+   "h": 2160,
+   "ms_per_pair": 75.575,
+   "ms_gpu": 52.901,
+   "samples": [
+    77.149,
+    75.575,
+    77.008
+   ],
+   "load_s": 0.2,
+   "host": "TensorRT fp16"
+  },
+  {
+   "engine": "rife4.26",
+   "res": "4k",
+   "w": 3840,
+   "h": 2160,
+   "ms_per_pair": 83.633,
+   "ms_gpu": 61.717,
+   "samples": [
+    83.633,
+    84.559,
+    86.775
+   ],
+   "load_s": 0.1,
+   "host": "TensorRT fp16"
+  },
+  {
+   "engine": "rife4.26heavy",
+   "res": "4k",
+   "w": 3840,
+   "h": 2160,
+   "ms_per_pair": 105.922,
+   "ms_gpu": 84.407,
+   "samples": [
+    110.626,
+    106.342,
+    105.922
+   ],
+   "load_s": 132.4,
+   "host": "TensorRT fp16"
+  }
+ ]
+}
