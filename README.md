@@ -46,6 +46,8 @@ out = core.vfsr4.FrameGen(src, multi=2, proxy_dir=r"...\fsr4")     # 固定 2×
 1080p 生成质量（19 个真实中间帧作 GT）。完整报告 `bench\results\report.md`，口径与坑
 `bench\docs\method.md`，图表在 `bench\results\charts\`、对比图在 `bench\results\compare\`。
 
+**图表、完整数据表与 4K 生成帧 2×2 对比：[`docs\benchmark.md`](docs/benchmark.md)**
+
 | | 1080p | 4K | 质量（VMAF） |
 |---|---|---|---|
 | DLSS-G | **8.00 ms/pair** | 29.38 | 58.11（锐度 0.61，最软） |
@@ -68,7 +70,7 @@ out = core.vfsr4.FrameGen(src, multi=2, proxy_dir=r"...\fsr4")     # 固定 2×
 | `vs-dlssg\src\` | **插件源码**：`frame_gen.cpp`（滤镜 + 切镜检测）、`d3d12_ctx.cpp`、每引擎一个 `*_session.cpp`，`profiles.h` 决定一个 DLL 用哪套；`build.bat` 一次编四个 DLL | ✓ |
 | `vs-dlssg\` | 成品包布局：`bin\` 放四个 DLL 和四个引擎包（`dlss45` / `xessfg` / `vfg` / `fsr4`），另有 `mpv\` 脚本、`test\`、`docs\` | 源码 ✓，`bin`/`obj` ✗（第三方运行时，见 `THIRD_PARTY_NOTICES.md`） |
 | `bench\` | 八引擎基准：`src\` 脚本、`results\` 报告与图表快照、`docs\method.md` | ✓ |
-| `docs\` | 19 篇实测与设计记录（sm86 解锁、吞吐优化、画质对比、mpv 集成） | ✓ |
+| `docs\` | 20 篇实测与设计记录（sm86 解锁、吞吐优化、画质对比、mpv 集成），图表在 `docs\benchmark\` | ✓ |
 | `spike\` | 不依赖 VapourSynth 的验证程序（NGX 调用序列、多帧、运动估计） | ✓ |
 | `test\` | 端到端 / 吞吐 / 一致性 / 日志解析脚本 | ✓ |
 | `media\` | 素材取样与各模型跑分脚本（`sintel_trailer_1080p.mp4` 自行准备） | 脚本 ✓ |
@@ -130,6 +132,7 @@ cmd /c E:\code\dlssg-vfi\vs-dlssg\src\build.bat
 | `docs\vdlssg-throughput.md` | 四处吞吐优化详解（18.9 → 55.15 fps）、踩过的坑 |
 | `docs\vdlssg-vs-rife422-flow.md` · `docs\vdlssg-vs-models.md` | 与 RIFE/FILM/IFRNet/minterpolate 的逐组对比；喂真实光流实测无效 |
 | `docs\engines-benchmark.md` | 八引擎基准摘要（完整报告在 `bench\`） |
+| `docs\benchmark.md` | **基准主页**：五张图表、11 档吞吐表、1080p 质量表、4K 生成帧 2×2 对比与原始数据链接 |
 | `docs\smv-dlssg-unlock.md` · `docs\smv-vfg-sm86-unlock.md` | 把 SmoothMyVideo 的 DLSS 4.5 / VFG 解锁到 RTX 20/30 |
 | `docs\hsr6x-measure.md` | 星铁 PV 4K 实测：6× 速度、GT 代理画质、切镜阈值曲线 |
 | `docs\mpv-dlssg.md` | 装进 mpv-lazy：部署清单、脚本选项、五个坑 |

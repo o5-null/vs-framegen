@@ -138,6 +138,17 @@ python src\make_compare.py               # 9 张对比图 → $VFI_DATA\quality\
 `probe_rife_layout.py`（11 通道布局自证）、`probe_dynamic_engine.py`（动态 vs 静态
 TRT bucket）、`probe_vfg_size.py`（VFG 尺寸敏感性）。
 
+4K 素材上的插件 API 对比图（`docs\benchmark\pv-compare-*.png`，DLSS-G/XeSS-FG/VFG/FSR4 的
+2×2 生成帧 + 真实帧）：
+
+```powershell
+python src\scan_pv_motion.py             # 扫全片相邻帧 PSNR，挑运动适中的时刻
+python src\make_pv_compare.py --force    # 抽 n/n+1/n+2，逐引擎生成中间帧并拼图
+```
+
+`make_pv_compare.py` 为每个引擎各起一个进程（`src\pv_engine_frame.py`），因为 NGX 每进程
+只能初始化一次；素材是 `测试数据\阿哈角色PV 4k.mkv`，靠 `参考插件\...\ffmpeg.exe` 抽帧。
+
 ## 目录
 
 ```
