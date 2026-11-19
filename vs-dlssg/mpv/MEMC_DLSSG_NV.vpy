@@ -42,6 +42,8 @@ if not hasattr(core, "vdlssg"):
     for _cand in (
         os.path.join(_here, os.pardir, "vs-plugins", "vdlssg.dll"),
         os.path.join(_here, "vdlssg.dll"),
+        # 开发树：..\..\vs-dlssg\bin\vdlssg.dll（脚本就在仓库 vs-dlssg\mpv\ 下时）
+        os.path.join(_here, os.pardir, os.pardir, "vs-dlssg", "bin", "vdlssg.dll"),
         # 开发树：..\..\..\..\vs-dlssg\bin\vdlssg.dll（mpv-lazy 放在仓库的 测试环境\ 下时）
         os.path.join(_here, os.pardir, os.pardir, os.pardir, os.pardir, "vs-dlssg", "bin", "vdlssg.dll"),
     ):
