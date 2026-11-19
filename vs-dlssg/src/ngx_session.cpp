@@ -176,6 +176,34 @@ bool proxyInstallLuid(const std::wstring& proxyDir, LUID& luid, bool* ownRecord)
   return found;
 }
 
+// A pack that has never run has an empty log, so its first session in a process cannot learn the
+// proxy's card from its own record. The pack folders live side by side under bin\ and the proxy's
+// choice is a machine constant, so a sibling pack's last install record answers just as well.
+bool siblingInstallLuid(const std::wstring& proxyDir, LUID& luid, std::wstring* packName) {
+  const size_t cut = proxyDir.find_last_of(L"\\/");
+  if (cut == std::wstring::npos) return false;
+  const std::wstring parent = proxyDir.substr(0, cut);
+  WIN32_FIND_DATAW entry{};
+  HANDLE search = FindFirstFileW((parent + L"\\*").c_str(), &entry);
+  if (search == INVALID_HANDLE_VALUE) return false;
+  bool found = false;
+  do {
+    if ((entry.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0) continue;
+    if (entry.cFileName[0] == L'.') continue;
+    const std::wstring sibling = parent + L"\\" + entry.cFileName;
+    if (_wcsicmp(sibling.c_str(), proxyDir.c_str()) == 0) continue;
+    LUID candidate{};
+    bool ignored = false;
+    if (proxyInstallLuid(sibling, candidate, &ignored)) {
+      luid = candidate;
+      found = true;
+      if (packName) *packName = entry.cFileName;
+    }
+  } while (FindNextFileW(search, &entry));
+  FindClose(search);
+  return found;
+}
+
 // EnumOutputs succeeds on outputs that are attached but switched off (a card with no desktop), so
 // ask the output itself: AttachedToDesktop is what separates the card the desktop runs on from one
 // that merely has a connector.
@@ -271,13 +299,24 @@ bool resolveAdapter(const Config& config, ComPtr<IDXGIAdapter1>& adapter, std::s
     Sleep(20);
     recorded = proxyInstallLuid(config.proxyDir, luid, &ownRecord);
   }
+  std::wstring borrowedPack;
+  if (!recorded) {
+    recorded = siblingInstallLuid(config.proxyDir, luid, &borrowedPack);
+  }
   if (recorded) {
     std::string luidError;
     if (pickAdapterMatching(adapter, true, luid.LowPart, &index, luidError)) {
       if (config.log) {
+        std::string source;
+        if (!borrowedPack.empty()) {
+          char narrow[64];
+          std::snprintf(narrow, sizeof(narrow), "%ls", borrowedPack.c_str());
+          source = std::string("the ") + narrow + " pack's last install";
+        } else {
+          source = ownRecord ? "this session's" : "last install";
+        }
         std::fprintf(stderr, "[%s] adapter %u follows the proxy (%s record): LUID 0x%lx, %s\n", tag,
-                     index, ownRecord ? "this session's" : "last install",
-                     static_cast<unsigned long>(luid.LowPart),
+                     index, source.c_str(), static_cast<unsigned long>(luid.LowPart),
                      adapterName(adapter.Get()).c_str());
       }
       return true;
