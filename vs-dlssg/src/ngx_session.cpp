@@ -21,6 +21,7 @@
 #include <atomic>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <mutex>
 #include <thread>
@@ -108,6 +109,167 @@ bool pickAdapter(int index, ComPtr<IDXGIAdapter1>& adapter, std::string& error) 
   if (FAILED(factory->EnumAdapters1(UINT(index), &adapter))) {
     error = "no DXGI adapter with index " + std::to_string(index);
     return false;
+  }
+  return true;
+}
+
+// The sm86 proxy hooks CUDA module creation and swaps in its sm_86 kernel pack for ONE device: at
+// install it routes to a single physical GPU and records that choice as "selected_luid" in its own
+// log. NGX initialises once per process and cannot be retried, so choosing an index that misses
+// that card fails in CreateDlssgFeature with 0xbad00002 - the runtime's own sm_89 cubin reaches
+// CreateCuModule on a device the proxy never patched (nvapi status -1). Follow the proxy instead of
+// guessing: read the record it wrote while loading, then take the adapter with that LUID.
+bool proxyInstallLuid(const std::wstring& proxyDir, LUID& luid) {
+  const std::wstring path = proxyDir + L"\\dlssg_sm86\\logs\\dlssg_sm86.log";
+  HANDLE file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+                            OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (file == INVALID_HANDLE_VALUE) return false;
+  LARGE_INTEGER size{};
+  if (!GetFileSizeEx(file, &size) || size.QuadPart <= 0) {
+    CloseHandle(file);
+    return false;
+  }
+  // Only the tail matters: the install record is written as the proxy loads, so the newest one
+  // carrying this pid is the one for this session.
+  const long long window = 512 * 1024;
+  LARGE_INTEGER at{};
+  at.QuadPart = size.QuadPart > window ? size.QuadPart - window : 0;
+  if (!SetFilePointerEx(file, at, nullptr, FILE_BEGIN)) {
+    CloseHandle(file);
+    return false;
+  }
+  std::string text(size_t(size.QuadPart - at.QuadPart), '\0');
+  DWORD got = 0;
+  const bool ok = ReadFile(file, &text[0], DWORD(text.size()), &got, nullptr) != 0;
+  CloseHandle(file);
+  if (!ok) return false;
+  text.resize(got);
+
+  const std::string pidTag = "\"pid\":" + std::to_string(GetCurrentProcessId()) + ",";
+  const std::string key = "\"selected_luid\":\"0x";
+  bool found = false;
+  size_t pos = 0;
+  while ((pos = text.find("\"event\":\"install\"", pos)) != std::string::npos) {
+    size_t lineBegin = text.rfind('\n', pos);
+    lineBegin = lineBegin == std::string::npos ? 0 : lineBegin + 1;
+    size_t lineEnd = text.find('\n', pos);
+    if (lineEnd == std::string::npos) lineEnd = text.size();
+    const std::string line = text.substr(lineBegin, lineEnd - lineBegin);
+    pos = lineEnd;
+    if (line.find(pidTag) == std::string::npos) continue;
+    const size_t value = line.find(key);
+    if (value == std::string::npos) continue;
+    // The record holds LUID::LowPart (it is what identifies a device here); the log prints %x.
+    luid.LowPart = std::strtoul(line.c_str() + value + key.size(), nullptr, 16);
+    luid.HighPart = 0;
+    found = true;
+  }
+  return found;
+}
+
+bool hasOutput(IDXGIAdapter1* adapter) {
+  ComPtr<IDXGIOutput> output;
+  return adapter->EnumOutputs(0, &output) == S_OK;
+}
+
+std::string adapterName(IDXGIAdapter1* adapter) {
+  DXGI_ADAPTER_DESC1 desc{};
+  if (FAILED(adapter->GetDesc1(&desc))) return "unknown adapter";
+  char narrow[256];
+  std::snprintf(narrow, sizeof(narrow), "%ls", desc.Description);
+  return narrow;
+}
+
+// One enumerator walk that both the LUID match and the fallback use. *indexOut receives the DXGI
+// index of the adapter chosen, for the log line.
+bool pickAdapterMatching(ComPtr<IDXGIAdapter1>& adapter, bool matchLowLuid, unsigned long lowLuid,
+                         UINT* indexOut, std::string& error) {
+  ComPtr<IDXGIFactory1> factory;
+  const HRESULT r = CreateDXGIFactory2(0, IID_PPV_ARGS(&factory));
+  if (FAILED(r)) {
+    error = "CreateDXGIFactory2 failed";
+    return false;
+  }
+  // Fallback preference, in order: an NVIDIA adapter that drives a display (the card the proxy
+  // routes to on a desktop machine), then any NVIDIA adapter, then adapter 0.
+  ComPtr<IDXGIAdapter1> nvidiaWithOutput, nvidia, first;
+  UINT nvidiaWithOutputIndex = 0, nvidiaIndex = 0, firstIndex = 0;
+  for (UINT index = 0;; ++index) {
+    ComPtr<IDXGIAdapter1> candidate;
+    if (factory->EnumAdapters1(index, &candidate) == DXGI_ERROR_NOT_FOUND) break;
+    DXGI_ADAPTER_DESC1 desc{};
+    candidate->GetDesc1(&desc);
+    if (matchLowLuid) {
+      if (desc.AdapterLuid.LowPart == lowLuid) {
+        adapter = candidate;
+        *indexOut = index;
+        return true;
+      }
+      continue;
+    }
+    if (!first) {
+      first = candidate;
+      firstIndex = index;
+    }
+    if (desc.VendorId == 0x10de) {
+      if (!nvidia) {
+        nvidia = candidate;
+        nvidiaIndex = index;
+      }
+      if (!nvidiaWithOutput && hasOutput(candidate.Get())) {
+        nvidiaWithOutput = candidate;
+        nvidiaWithOutputIndex = index;
+      }
+    }
+  }
+  if (matchLowLuid) {
+    error = "no DXGI adapter carries the proxy's selected LUID";
+    return false;
+  }
+  if (nvidiaWithOutput) {
+    adapter = nvidiaWithOutput;
+    *indexOut = nvidiaWithOutputIndex;
+  } else if (nvidia) {
+    adapter = nvidia;
+    *indexOut = nvidiaIndex;
+  } else {
+    adapter = first;
+    *indexOut = firstIndex;
+  }
+  if (!adapter) {
+    error = "no DXGI adapter found";
+    return false;
+  }
+  return true;
+}
+
+// Which device the session runs on. gpu= names one; otherwise the certificate comes from the proxy
+// itself, and only when it left no record does the session fall back to a preferred adapter.
+bool resolveAdapter(const Config& config, ComPtr<IDXGIAdapter1>& adapter, std::string& error) {
+  const char* tag = config.engine == Engine::Dlss ? "vdlssg" : "vxessfg";
+  if (!config.adapterAuto) return pickAdapter(config.adapterIndex, adapter, error);
+
+  UINT index = 0;
+  LUID luid{};
+  if (proxyInstallLuid(config.proxyDir, luid)) {
+    std::string luidError;
+    if (pickAdapterMatching(adapter, true, luid.LowPart, &index, luidError)) {
+      if (config.log) {
+        std::fprintf(stderr, "[%s] adapter %u follows the proxy: selected LUID 0x%lx, %s\n", tag,
+                     index, static_cast<unsigned long>(luid.LowPart),
+                     adapterName(adapter.Get()).c_str());
+      }
+      return true;
+    }
+    if (config.log) {
+      std::fprintf(stderr, "[%s] %s; picking an adapter by preference instead\n", tag,
+                   luidError.c_str());
+    }
+  }
+  if (!pickAdapterMatching(adapter, false, 0, &index, error)) return false;
+  if (config.log) {
+    std::fprintf(stderr, "[%s] adapter %u by preference (no gpu= and no proxy record): %s\n", tag,
+                 index, adapterName(adapter.Get()).c_str());
   }
   return true;
 }
@@ -540,7 +702,7 @@ bool NgxSession::Impl::init(const Config& config, std::string& error) {
   if (!loadProxy(config.proxyDir, proxyModule, error)) return false;
 
   ComPtr<IDXGIAdapter1> adapter;
-  if (!pickAdapter(config.adapterIndex, adapter, error)) return false;
+  if (!resolveAdapter(config, adapter, error)) return false;
 
   gpu.reset(new Gpu());
   // Pass the resolved sizes: config.motionWidth is 0 when the caller did not supply a motion clip.
@@ -609,8 +771,14 @@ bool NgxSession::Impl::init(const Config& config, std::string& error) {
   if (!gpu->endAndWait(error)) return false;
   if (NVSDK_NGX_FAILED(r) || !feature) {
     // 0xbad0000b here means the snippet arch check rejected the runtime: PathListInfo is wrong
-    // or version.dll was not loaded first.
+    // or version.dll was not loaded first. 0xbad00002 means the feature was created on a device
+    // the proxy did not patch - see proxyInstallLuid above.
     error = describe("CreateDlssgFeature", r);
+    if (r == NVSDK_NGX_Result(0xbad00002) && !config.adapterAuto) {
+      error += ": the sm86 proxy patches one card only, and gpu=" +
+               std::to_string(config.adapterIndex) +
+               " is not it - drop gpu= to follow the proxy, or try another index";
+    }
     return false;
   }
   return true;

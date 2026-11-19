@@ -63,8 +63,7 @@ out = core.vdlssg.FrameGen(
     src,
     multi=6,                 # 2..6，输出 multi 倍帧数
     scene_threshold=0.25,    # 0 关闭切镜检测
-    gpu=0,
-    proxy_dir=r"E:\...\vs-dlssg\dlss45",   # 可省略：默认 <DLL 目录>\dlss45
+    proxy_dir=r"E:\...\vs-dlssg\bin\dlss45",   # 可省略：默认 <DLL 目录>\bin\dlss45
 )
 out = core.std.AssumeFPS(out, fpsnum=src.fps_num * 6, fpsden=src.fps_den)
 out.set_output()
@@ -76,7 +75,7 @@ out.set_output()
 | `mv` | 无 | 可选光流剪辑（RGB，2 或 3 平面，全尺寸或半尺寸）。**实测这颗运行库基本不使用 mvec**（±30 px 常数场只让输出变化 1.5e-4），可以不给 |
 | `scene_threshold` | 0.15 | 相邻帧三平面 8 采样平均绝对差超过它就判切镜、该对直接 hold。快节奏素材建议 0.25–0.35：实测该片 10 s 内 0.15 会 hold 掉 11% 的帧对 |
 | `proxy_dir` | `<DLL 目录>\dlss45` | 引擎包目录，必须含 `version.dll` 与 `dlssg_sm86\` |
-| `gpu` | 0 | 适配器序号 |
+| `gpu` | 无（自动） | DXGI 适配器序号。不写时跟随 sm86 代理：载入代理后读它 install 记录里的 `selected_luid`，选同一张卡；没有记录就取接显示器的 NVIDIA 卡。多显卡机器上旧的 `gpu=0` 可能正是代理没覆写的那张，会报 `0xbad00002` |
 | `camera` | 0 | 相机类型（0 默认 / 1 第一人称 / 2 第三人称 / 3 工具） |
 | `log` | 0 | 每帧向 stderr 打一行毫秒数 |
 

@@ -409,8 +409,13 @@ void VS_CC frameGenCreate(const VSMap* in, VSMap* out, void* userData, VSCore* c
   config.height = uint32_t(vi->height);
   config.motionWidth = uint32_t(mvWidth);
   config.motionHeight = uint32_t(mvHeight);
-  config.adapterIndex = int(vsapi->mapGetInt(in, "gpu", 0, &err));
-  if (err) config.adapterIndex = 0;
+  config.adapterIndex = int(vsapi->mapGetInt(in, "gpu", -1, &err));
+  if (err || config.adapterIndex < 0) {
+    config.adapterIndex = 0;
+    config.adapterAuto = true;
+  } else {
+    config.adapterAuto = false;
+  }
   config.proxyDir = proxyDir;
   config.engine = engine;
   config.log = data->log;

@@ -119,7 +119,7 @@ if (opt.menuDetect) {
 |---|---|
 | `multi` = 2 / 3 / 4 | 每对源帧生成 1 / 2 / 3 张中间帧（走 `MultiFrameCount`/`MultiFrameIndex`） |
 | `scene_threshold` = 0.15（缺省） | 切镜判定灵敏度，超过即吐源帧（`_DLSSGFallback=1`） |
-| `gpu` | 选哪张显卡 |
+| `gpu` | 选哪张显卡；不写时跟随 sm86 代理选中的那张（多显卡机器别再写死 0） |
 
 质量本身没有档位可调。想更好只能换算法（RIFE/FILM 等），想更快只能降 `multi`。
 

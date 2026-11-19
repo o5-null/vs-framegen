@@ -14,14 +14,14 @@ from vapoursynth import core
 
 Multi = 3
 Scene = 0.25
-Gpu = 0
+Gpu = None
 Pre_H = 0
 Log = False
 ## <2|3|4|5|6> 整数，帧率倍数；每对相邻源帧插 Multi-1 张
 ##   1080p 可以 6（单次约 3 ms），1440p 用 3~4，4K 只用 2（6× 是 22 ms 级且会爆显存）
 ## 浮点，切镜阈值（三平面 8 采样平均绝对差），0 关闭
 ##   快节奏/粒子闪白素材建议 0.25，否则默认行为会把 11% 的帧对 hold 成重复帧；更稳妥用 0.35
-## 整数，使用的显卡序号，0 为排序一号
+## 整数，使用的显卡序号，0 为排序一号；None 跟随 sm86 代理在安装时选中的那张卡（多显卡机器推荐）
 ## 整数，>0 时先把源预缩到这个高度再补帧（4K 6× 显存吃紧时可填 1080）
 ## <True|False> 每帧向 stderr 打一行 evaluate 耗时
 
@@ -65,7 +65,8 @@ fmt_in = clip.format.id
 
 # 插件只吃 RGBS（float32 三平面）
 src = core.resize.Bilinear(clip, format=vs.RGBS, matrix_in_s="709" if yuv_in else None)
-fg = core.vdlssg.FrameGen(src, multi=Multi, gpu=Gpu, scene_threshold=Scene, log=1 if Log else 0)
+fg = core.vdlssg.FrameGen(src, multi=Multi, scene_threshold=Scene, log=1 if Log else 0,
+                          **({} if Gpu is None else {"gpu": Gpu}))
 
 # 回到源像素格式；mpv 的 vf=vapoursynth 只接受有限的 8/10bit YUV 格式
 out = core.resize.Bilinear(

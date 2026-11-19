@@ -73,7 +73,11 @@ struct Config {
   // coarser field (Encore's estimator emits one vector per 2x2 block) sets half of that here.
   uint32_t motionWidth = 0;
   uint32_t motionHeight = 0;
+  // adapterIndex is the DXGI enumerator index from the gpu= parameter. adapterAuto stays true when
+  // the script did not name one: the NGX path then follows the adapter the sm86 proxy patched (see
+  // resolveAdapter in ngx_session.cpp), the CUDA and Vulkan paths keep taking index 0 as before.
   int adapterIndex = 0;
+  bool adapterAuto = true;
   Engine engine = Engine::Dlss;
   std::wstring proxyDir;  // folder holding the engine's runtime files
   bool log = false;

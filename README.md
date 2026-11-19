@@ -20,8 +20,8 @@ core = vs.core
 src = core.ffms2.Source(r"input.mkv")
 src = core.resize.Bicubic(src, format=vs.RGBS, matrix_in_s="709")   # 必须 RGBS
 
-out = core.vdlssg.FrameGen(src, multi=2, scene_threshold=0.25, gpu=0,
-                           proxy_dir=r"E:\code\dlssg-vfi\vs-dlssg\dlss45")
+out = core.vdlssg.FrameGen(src, multi=2, scene_threshold=0.25,
+                           proxy_dir=r"E:\code\dlssg-vfi\vs-dlssg\bin\dlss45")
 out = core.std.AssumeFPS(out, fpsnum=src.fps_num * 2, fpsden=src.fps_den)
 out.set_output()
 ```
@@ -68,7 +68,7 @@ out = core.vfsr4.FrameGen(src, multi=2, proxy_dir=r"...\fsr4")     # 固定 2×
 | `vs-dlssg\src\` | **插件源码**：`frame_gen.cpp`（滤镜 + 切镜检测）、`d3d12_ctx.cpp`、每引擎一个 `*_session.cpp`，`profiles.h` 决定一个 DLL 用哪套；`build.bat` 一次编四个 DLL | ✓ |
 | `vs-dlssg\` | 成品包布局：`bin\` 放四个 DLL 和四个引擎包（`dlss45` / `xessfg` / `vfg` / `fsr4`），另有 `mpv\` 脚本、`test\`、`docs\` | 源码 ✓，`bin`/`obj` ✗（第三方运行时，见 `THIRD_PARTY_NOTICES.md`） |
 | `bench\` | 八引擎基准：`src\` 脚本、`results\` 报告与图表快照、`docs\method.md` | ✓ |
-| `docs\` | 16 篇实测与设计记录（sm86 解锁、吞吐优化、画质对比、mpv 集成） | ✓ |
+| `docs\` | 19 篇实测与设计记录（sm86 解锁、吞吐优化、画质对比、mpv 集成） | ✓ |
 | `spike\` | 不依赖 VapourSynth 的验证程序（NGX 调用序列、多帧、运动估计） | ✓ |
 | `test\` | 端到端 / 吞吐 / 一致性 / 日志解析脚本 | ✓ |
 | `media\` | 素材取样与各模型跑分脚本（`sintel_trailer_1080p.mp4` 自行准备） | 脚本 ✓ |
@@ -134,6 +134,7 @@ cmd /c E:\code\dlssg-vfi\vs-dlssg\src\build.bat
 | `docs\hsr6x-measure.md` | 星铁 PV 4K 实测：6× 速度、GT 代理画质、切镜阈值曲线 |
 | `docs\mpv-dlssg.md` | 装进 mpv-lazy：部署清单、脚本选项、五个坑 |
 | `docs\licensing.md` · `THIRD_PARTY_NOTICES.md` | 第三方 DLL 的许可边界、实际放哪、从哪获取 |
+| `docs\vdlssg-adapter.md` | 多显卡：代理只覆写一张卡，插件如何跟随它选卡（`0xbad00002` 的成因） |
 
 ## 致谢与商标
 

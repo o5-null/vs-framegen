@@ -1,6 +1,6 @@
 import re
 
-data = open(r"E:\code\dlssg-vfi\vs-dlssg\vfg\nvVFXVideoFrameGeneration.dll", "rb").read()
+data = open(r"E:\code\dlssg-vfi\vs-dlssg\bin\vfg\nvVFXVideoFrameGeneration.dll", "rb").read()
 pat = rb"[ -~]{50,800}"
 seen = set()
 for m in re.finditer(pat, data):
