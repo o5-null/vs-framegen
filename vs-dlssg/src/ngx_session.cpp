@@ -118,8 +118,14 @@ bool pickAdapter(int index, ComPtr<IDXGIAdapter1>& adapter, std::string& error) 
 // log. NGX initialises once per process and cannot be retried, so choosing an index that misses
 // that card fails in CreateDlssgFeature with 0xbad00002 - the runtime's own sm_89 cubin reaches
 // CreateCuModule on a device the proxy never patched (nvapi status -1). Follow the proxy instead of
-// guessing: read the record it wrote while loading, then take the adapter with that LUID.
-bool proxyInstallLuid(const std::wstring& proxyDir, LUID& luid) {
+// guessing.
+//
+// The proxy writes its log through a buffer that only reaches the disk when the process exits, so
+// this session's own record is not there to read. What is there is every earlier session on the
+// same boot, and the LUID it routes to depends on the adapter set, not on the caller: on this
+// machine 23 consecutive installs all named the same card. So the newest record is the hint; the
+// pid match is kept first in case a build ever flushes line by line.
+bool proxyInstallLuid(const std::wstring& proxyDir, LUID& luid, bool* ownRecord) {
   const std::wstring path = proxyDir + L"\\dlssg_sm86\\logs\\dlssg_sm86.log";
   HANDLE file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
                             OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -129,8 +135,7 @@ bool proxyInstallLuid(const std::wstring& proxyDir, LUID& luid) {
     CloseHandle(file);
     return false;
   }
-  // Only the tail matters: the install record is written as the proxy loads, so the newest one
-  // carrying this pid is the one for this session.
+  // Only the tail matters: the newest install record is at the end of the file.
   const long long window = 512 * 1024;
   LARGE_INTEGER at{};
   at.QuadPart = size.QuadPart > window ? size.QuadPart - window : 0;
@@ -145,31 +150,40 @@ bool proxyInstallLuid(const std::wstring& proxyDir, LUID& luid) {
   if (!ok) return false;
   text.resize(got);
 
-  const std::string pidTag = "\"pid\":" + std::to_string(GetCurrentProcessId()) + ",";
+  // The proxy writes "2026-11-19 13:31:21.889  pid 44680  vspipe.exe  I  {json}", so the pid lives in
+  // the text prefix, not in the record itself. Match it inside the prefix only, spaces included, so
+  // that pid 4468 cannot match 44680.
+  const std::string pidTag = " pid " + std::to_string(GetCurrentProcessId()) + " ";
   const std::string key = "\"selected_luid\":\"0x";
   bool found = false;
+  bool ours = false;
   size_t pos = 0;
   while ((pos = text.find("\"event\":\"install\"", pos)) != std::string::npos) {
-    size_t lineBegin = text.rfind('\n', pos);
-    lineBegin = lineBegin == std::string::npos ? 0 : lineBegin + 1;
-    size_t lineEnd = text.find('\n', pos);
-    if (lineEnd == std::string::npos) lineEnd = text.size();
-    const std::string line = text.substr(lineBegin, lineEnd - lineBegin);
-    pos = lineEnd;
-    if (line.find(pidTag) == std::string::npos) continue;
-    const size_t value = line.find(key);
-    if (value == std::string::npos) continue;
+    const size_t lineBegin = text.rfind('\n', pos);
+    const size_t begin = lineBegin == std::string::npos ? 0 : lineBegin + 1;
+    const size_t lineEnd = text.find('\n', pos);
+    const size_t end = lineEnd == std::string::npos ? text.size() : lineEnd;
+    const size_t value = text.find(key, pos);
+    pos = end;
+    if (value == std::string::npos || value > end) continue;
     // The record holds LUID::LowPart (it is what identifies a device here); the log prints %x.
-    luid.LowPart = std::strtoul(line.c_str() + value + key.size(), nullptr, 16);
+    luid.LowPart = std::strtoul(text.c_str() + value + key.size(), nullptr, 16);
     luid.HighPart = 0;
     found = true;
+    ours = text.substr(begin, end - begin).find(pidTag) != std::string::npos;
   }
+  if (ownRecord) *ownRecord = ours;
   return found;
 }
 
-bool hasOutput(IDXGIAdapter1* adapter) {
+// EnumOutputs succeeds on outputs that are attached but switched off (a card with no desktop), so
+// ask the output itself: AttachedToDesktop is what separates the card the desktop runs on from one
+// that merely has a connector.
+bool hasDesktopOutput(IDXGIAdapter1* adapter) {
   ComPtr<IDXGIOutput> output;
-  return adapter->EnumOutputs(0, &output) == S_OK;
+  if (adapter->EnumOutputs(0, &output) != S_OK) return false;
+  DXGI_OUTPUT_DESC desc{};
+  return SUCCEEDED(output->GetDesc(&desc)) && desc.AttachedToDesktop;
 }
 
 std::string adapterName(IDXGIAdapter1* adapter) {
@@ -216,7 +230,7 @@ bool pickAdapterMatching(ComPtr<IDXGIAdapter1>& adapter, bool matchLowLuid, unsi
         nvidia = candidate;
         nvidiaIndex = index;
       }
-      if (!nvidiaWithOutput && hasOutput(candidate.Get())) {
+      if (!nvidiaWithOutput && hasDesktopOutput(candidate.Get())) {
         nvidiaWithOutput = candidate;
         nvidiaWithOutputIndex = index;
       }
@@ -251,12 +265,19 @@ bool resolveAdapter(const Config& config, ComPtr<IDXGIAdapter1>& adapter, std::s
 
   UINT index = 0;
   LUID luid{};
-  if (proxyInstallLuid(config.proxyDir, luid)) {
+  bool ownRecord = false;
+  bool recorded = proxyInstallLuid(config.proxyDir, luid, &ownRecord);
+  for (int attempt = 0; !recorded && attempt < 5; ++attempt) {
+    Sleep(20);
+    recorded = proxyInstallLuid(config.proxyDir, luid, &ownRecord);
+  }
+  if (recorded) {
     std::string luidError;
     if (pickAdapterMatching(adapter, true, luid.LowPart, &index, luidError)) {
       if (config.log) {
-        std::fprintf(stderr, "[%s] adapter %u follows the proxy: selected LUID 0x%lx, %s\n", tag,
-                     index, static_cast<unsigned long>(luid.LowPart),
+        std::fprintf(stderr, "[%s] adapter %u follows the proxy (%s record): LUID 0x%lx, %s\n", tag,
+                     index, ownRecord ? "this session's" : "last install",
+                     static_cast<unsigned long>(luid.LowPart),
                      adapterName(adapter.Get()).c_str());
       }
       return true;

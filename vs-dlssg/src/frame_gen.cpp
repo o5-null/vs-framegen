@@ -318,6 +318,9 @@ void VS_CC frameGenCreate(const VSMap* in, VSMap* out, void* userData, VSCore* c
   std::wstring proxyDir = moduleDirectory();
   const std::wstring engineDir = proxyDir + L"\\" FG_PROXY_DIR;
   if (isProxyDir(engineDir)) proxyDir = engineDir;
+  // Each optional lookup below reports "not found" through the same pointer, so clear it first: a
+  // stale error from an earlier key must not decide whether a later one was present.
+  err = 0;
   const char* proxyArg = vsapi->mapGetData(in, "proxy_dir", 0, &err);
   if (err == 0 && proxyArg && *proxyArg) {
     const int need = MultiByteToWideChar(CP_UTF8, 0, proxyArg, -1, nullptr, 0);
@@ -328,6 +331,7 @@ void VS_CC frameGenCreate(const VSMap* in, VSMap* out, void* userData, VSCore* c
   }
 
   const int maxMulti = engineMaxMulti(engine);
+  err = 0;
   const int64_t multi = vsapi->mapGetInt(in, "multi", 0, &err);
   const bool multiGiven = err == 0;
   if (multiGiven && (multi < 2 || multi > maxMulti)) {
@@ -343,6 +347,7 @@ void VS_CC frameGenCreate(const VSMap* in, VSMap* out, void* userData, VSCore* c
     return;
   }
 
+  err = 0;
   VSNode* node = vsapi->mapGetNode(in, "clip", 0, &err);
   if (err) {
     vsapi->mapSetError(out, FG_NS ": clip is required");
@@ -366,6 +371,7 @@ void VS_CC frameGenCreate(const VSMap* in, VSMap* out, void* userData, VSCore* c
   // (one vector per pixel) or half of it (one vector per 2x2 block, what Encore's estimator emits).
   int mvWidth = 0;
   int mvHeight = 0;
+  err = 0;
   VSNode* mvNode = vsapi->mapGetNode(in, "mv", 0, &err);
   if (err) mvNode = nullptr;
   if (mvNode) {
@@ -400,8 +406,10 @@ void VS_CC frameGenCreate(const VSMap* in, VSMap* out, void* userData, VSCore* c
   data->multi = multiGiven ? int(multi) : 2;
   data->vi.numFrames = vi->numFrames >= 0 ? vi->numFrames * data->multi : vi->numFrames;
   data->numFrames = vi->numFrames;
+  err = 0;
   data->sceneThreshold = vsapi->mapGetFloat(in, "scene_threshold", 0, &err);
   if (err) data->sceneThreshold = 0.15;
+  err = 0;
   data->log = vsapi->mapGetInt(in, "log", 0, &err) != 0 && err == 0;
 
   Config config;
@@ -409,7 +417,8 @@ void VS_CC frameGenCreate(const VSMap* in, VSMap* out, void* userData, VSCore* c
   config.height = uint32_t(vi->height);
   config.motionWidth = uint32_t(mvWidth);
   config.motionHeight = uint32_t(mvHeight);
-  config.adapterIndex = int(vsapi->mapGetInt(in, "gpu", -1, &err));
+  err = 0;
+  config.adapterIndex = int(vsapi->mapGetInt(in, "gpu", 0, &err));
   if (err || config.adapterIndex < 0) {
     config.adapterIndex = 0;
     config.adapterAuto = true;
@@ -419,6 +428,11 @@ void VS_CC frameGenCreate(const VSMap* in, VSMap* out, void* userData, VSCore* c
   config.proxyDir = proxyDir;
   config.engine = engine;
   config.log = data->log;
+  if (data->log) {
+    std::fprintf(stderr, "[%s] args: gpu err=%d index=%d auto=%d log=%d\n", FG_NS, err,
+                 config.adapterIndex, int(config.adapterAuto), int(data->log));
+  }
+  err = 0;
   config.camera = int(vsapi->mapGetInt(in, "camera", 0, &err));
   if (err) config.camera = 0;
   data->camera = config.camera;
