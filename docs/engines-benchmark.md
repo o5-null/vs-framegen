@@ -1,12 +1,12 @@
 # 八引擎帧生成基准（吞吐 + 质量）
 
 完整报告、原始数据、图表与生成帧：`测试数据\engines\report.md`。
-脚本、方法文档与结果快照已独立成仓库 `framegen-bench\`（有自己的 git 历史）。
+脚本、方法文档与结果快照在仓库内 `bench\`（`bench\docs\method.md` 记录口径与坑）。
 2026-11-19，RTX 3080 10GB (sm_86)，1080p 动漫素材 40 帧，2 倍速。
 
 ## 一句话结论
 
-DLSSG 在全部分辨率最快（1080p 8.00 ms/pair）但最软（锐度 0.61× 真实帧）；VFG 的耗时几乎与分辨率无关（18.4→22.6 ms），4K 反超 DLSSG 并拿第一（88 fps 输出）；质量由 RIFE 系列领跑（`rife4.26heavy` VMAF 63.19，19 帧赢 13 帧，`rife4.6` 62.37 且最快）；FSR4 与 XeSS-FG 在 3080 上又慢又差（4K ≈143 ms/pair、VMAF 56.2/59.6），不可用。
+DLSSG 在 1080p 及以下最快（1080p 8.00 ms/pair）但最软（锐度 0.61× 真实帧）；VFG 的耗时几乎与分辨率无关（18.4→22.6 ms），4K 反超 DLSSG 并拿第一（88 fps 输出）；质量由 RIFE 系列领跑（`rife4.26heavy` VMAF 63.19，19 帧赢 13 帧，`rife4.6` 62.37 且最快）；FSR4 与 XeSS-FG 在 3080 上又慢又差（4K ≈143 ms/pair、VMAF 56.2/59.6），不可用。
 
 ## 吞吐（ms/pair，2 倍速，越低越好；5 遍取最小）
 
@@ -49,13 +49,13 @@ DLSSG 13.4→3.5 ms/Mpx（固定开销+按像素），VFG 42.8→2.7（固定成
 
 ## 复现
 
-脚本在 `framegen-bench\src\`（口径与坑见该仓库 `docs\method.md`）：
+脚本在 `bench\src\`（口径与坑见 `bench\docs\method.md`）：
 
 ```powershell
-E:\code\VFI\.venv\Scripts\python.exe framegen-bench\src\run_throughput.py   # 11 档 × 8 引擎
-E:\code\VFI\.venv\Scripts\python.exe framegen-bench\src\run_quality.py
-E:\code\VFI\.venv\Scripts\python.exe framegen-bench\src\metrics.py
-E:\code\VFI\.venv\Scripts\python.exe framegen-bench\src\make_charts.py
-E:\code\VFI\.venv\Scripts\python.exe framegen-bench\src\make_compare.py
-E:\code\VFI\.venv\Scripts\python.exe framegen-bench\src\probes\probe_dynamic_engine.py
+E:\code\VFI\.venv\Scripts\python.exe bench\src\run_throughput.py   # 11 档 × 8 引擎
+E:\code\VFI\.venv\Scripts\python.exe bench\src\run_quality.py
+E:\code\VFI\.venv\Scripts\python.exe bench\src\metrics.py
+E:\code\VFI\.venv\Scripts\python.exe bench\src\make_charts.py
+E:\code\VFI\.venv\Scripts\python.exe bench\src\make_compare.py
+E:\code\VFI\.venv\Scripts\python.exe bench\src\probes\probe_dynamic_engine.py
 ```

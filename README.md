@@ -1,106 +1,127 @@
-# vdlssg — 用 DLSS 帧生成给视频插帧
+# vs-framegen — 用游戏帧生成给视频插帧
 
-把 NVIDIA DLSS Frame Generation（游戏里的"帧生成"）当作视频插帧器，做成一个
-VapourSynth 插件。在 RTX 3080（Ampere sm_86，官方不支持帧生成）上用
-`dlssg_for_sm86` 代理跑通，1080p 单张中间帧 GPU 侧约 1.36 ms。
+把 NVIDIA DLSS Frame Generation、Intel XeSS-FG、NVIDIA VFG、AMD FSR 4 做成 **VapourSynth 补帧插件**，
+在 RTX 3080（Ampere sm_86，官方不支持帧生成）上通过 `dlssg_for_sm86` / IAT 代理跑通；
+同一份宿主源码编译出四个 DLL，一个引擎一个插件。仓库里还有一套**八引擎横向基准**（含 RIFE 四个变体）。
 
-## 结论摘要
-
-| 问题 | 结论 |
-|---|---|
-| rtx-encore 能不能移植 | 不能（无源码）；但它验证过的思路可以用官方 DLSS-G 运行时直接实现 |
-| 3080 能不能跑 | 能，靠 SM86 代理绕过架构 gate，见 `docs\dlssg-on-3080-spike.md` |
-| 要不要自己算光流/深度 | **不用**，但纹理必须给。`nullptr` → `0xbad0000a`；内容可常量：深度 0.05/0.5/0.95 扫描逐位相同，块匹配矢量与零矢量最大只差 8/255。喂 DIS 顶配稠密光流后 VMAF 只动 +0.003（`docs\vdlssg-vs-rife422-flow.md`） |
-| 切镜谁管 | 插件自己管。运行库实测不做切镜检测（`suppressed` 恒 0） |
-| 画质对比 RIFE | 略输：VMAF 77.11 vs rife47 79.74（差 2.6 分），但远好于 minterpolate/blend |
-| 有没有"预设" | **没有**。FG 无任何 quality preset，见 `docs\vdlssg-presets.md` |
-| 多帧生成能不能用 | 能，2×–6× 均已实现；2× 画质最优，6× 需要随包 `dist\engine45`（`MaxGeneratedFrames=5`），见 `docs\vdlssg-multiframe.md` 与 `docs\vdlssg45-engine.md` |
-| 换成 XeFG / FSR 4.1 Lite | XeFG 协议上可接（NGX 即接口），但要格式降位 + 真光流 + 深度；FSR 4.1 Lite 在三份参考实现里不存在。见 `docs\vdlssg-engines.md` |
-| 吞吐 | 2160p 55.15 fps 输出（2×），1080p 139.98 fps；24 fps 素材实时 2× 有约 15% 余量 |
-| 第三方 app 的 DLSS 4.5 能不能搬到 20/30 | 能。SmoothMyVideo 的 `dlssg2f.exe` 补三行（先载代理 + 扩 PathListInfo）+ 放宽 asar 里一处 GPU 正则即可，3080 上实测单趟 6x。见 `docs\smv-dlssg-unlock.md` |
-
-## 插件
-
-```python
-core.std.LoadPlugin(path=r"E:\code\dlssg-vfi\plugin\vdlssg.dll")
-clip = core.ffms2.Source(r"E:\code\dlssg-vfi\media\sintel_trailer_1080p.mp4")
-clip = core.resize.Bicubic(clip, format=vs.RGBS, matrix_in_s="709")   # 必须 RGBS
-out  = core.vdlssg.FrameGen(clip, multi=2, proxy_dir=r"E:\code\dlssg-vfi\dist\engine45",
-                            gpu=0, scene_threshold=0.15, log=1)
-
-# 可选：喂真实运动矢量（RGBS，平面0=水平/平面1=垂直，单位像素，指向上一帧）
-out  = core.vdlssg.FrameGen(clip, multi=2, mv=mvclip,
-                            proxy_dir=r"E:\code\dlssg-vfi\dist\engine45")
-
-# 可选：相机描述（默认 0 即可；2/3 会如实声明帧间相机运动，实测画质更差）
-out  = core.vdlssg.FrameGen(clip, multi=2, proxy_dir=r"E:\code\dlssg-vfi\dist\engine45", camera=0)
-
-# 6 倍：必须在 engine45 引擎包上跑（stock 运行库只认到 4×）
-out  = core.vdlssg.FrameGen(clip, multi=6, proxy_dir=r"E:\code\dlssg-vfi\dist\engine45")
+```
+src (vs-dlssg\src) ──┬── vdlssg.dll   DLSS-G       D3D12 + NGX（引擎跑在进程内）
+                     ├── vxessfg.dll  XeSS-FG      D3D12 + NGX
+                     ├── vvfg.dll     NVIDIA VFG   CUDA（每中间帧一条 context）
+                     └── vfsr4.dll    AMD FSR 4    Vulkan 导入桥共享纹理
 ```
 
-| 参数 | 缺省 | 说明 |
-|---|---|---|
-| `clip` | — | 必须 `RGBS`（float32、三平面）；NV12/YUV 会被拒绝 |
-| `multi` | 2 | 每对源帧生成 `multi-1` 张中间帧（2–6 倍帧率）。上限同时受运行时 `DLSSG.MultiFrameCountMax` 约束：stock `dlssg_sm86`（`MaxGeneratedFrames=3`）到 4×，`dist\engine45`（`=5`）到 6× |
-| `mv` | 无 | 可选运动矢量剪辑：`RGBS`，与 `clip` 同尺寸/帧数/帧率；平面 0 = 水平、平面 1 = 垂直，单位像素，第 k 帧的场定义在源帧 k 网格上、指向帧 k−1。不给则用常量零场（实测对输出影响极小） |
-| `proxy_dir` | 插件旁的 `engine45\`，否则插件所在目录 | 含 `version.dll` 与 `dlssg_sm86\` 的目录；`engine45` 是提取出来的 DLSS 4.5 引擎包（6× 上限） |
-| `gpu` | 0 | 显卡序号 |
-| `scene_threshold` | 0.15 | 切镜判定阈值（8 像素采样 luma 平均绝对差） |
-| `camera` | 0 | 传给运行库的相机描述：0 = 五个单位阵 + 正交投影（默认）；1 = 真实透视投影、无帧间相机运动；2 = 透视 + 按该 pair 的运动场拟合 `clipToPrevClip`；3 = 同 2 且 `cameraMotionIncluded=false`。实测 1 输出逐位不变，2/3 让输出变化但 VMAF 反降 0.29（`docs\vdlssg-vs-rife422-flow.md`），保持 0 |
-| `log` | 0 | 1 = 每张生成帧打印耗时到 stderr |
+## 快速开始
 
-输出属性：`_DLSSGGenerated`、`_DLSSGFallback`（0 正常 / 1 切镜 / 2 抑制 / 3 末帧保持）、
-`_DLSSGSceneCut`、`_DLSSGMultiFrameIndex`。
+```python
+import vapoursynth as vs
+core = vs.core
 
-## 文档
+src = core.ffms2.Source(r"input.mkv")
+src = core.resize.Bicubic(src, format=vs.RGBS, matrix_in_s="709")   # 必须 RGBS
 
-| 文件 | 内容 |
-|---|---|
-| `docs\dlssg-on-3080-spike.md` | 三条硬前提、NGX 调用序列、spike 探针、原始 VMAF/吞吐 |
-| `docs\vdlssg-plugin.md` | 插件设计、切镜/抑制/hold 语义、三个已修 bug 与回归入口 |
-| `docs\vdlssg-throughput.md` | 四处吞吐优化详解（18.9 → 55.15 fps）、踩过的坑 |
-| `docs\vdlssg-vs-models.md` | 与 RIFE/FILM/IFRNet/minterpolate/blend 的十组三帧逐组校准 |
-| `docs\vdlssg-multiframe.md` | 多帧生成：SDK 语义、抑制标志、位置验证、质量与吞吐表 |
-| `docs\vdlssg-presets.md` | "预设"取证（FG 无 preset）、可迁移开关清单、两项实测均无效 |
-| `docs\vdlssg-engines.md` | 接入面实证：NGX 即接口、XeFG 的输入/格式契约、FSR 4.1 Lite 不存在 |
-| `docs\vdlssg-vs-rife422-flow.md` | 测试数据 1080p：帧质量 + 稠密光流 + 喂真实光流（dlssg_mv）+ 耗时 |
-| `docs\rtx-encore-motion-estimator.md` | Encore 自研运动估计逆向：10 个 pass、深度加权分层块匹配、S10.5 编码、可用性评估 |
-| `docs\smv-dlssg-unlock.md` | 把 SmoothMyVideo 的 DLSS 4.5 从 RTX 40/50 解锁到 20/30：宿主三处补丁、asar 门限、证据与坑（产物 `dist\smv-dlssg-unlock`） |
-| `docs\vdlssg45-engine.md` | `dist\engine45` 引擎包：与 SMV / stock 代理的差异、6× 上限的来源、冒烟验证与用法 |
-| `docs\hsr6x-measure.md` | 星铁 PV 4K 实测：6× 速度、GT 代理画质、mvec 实测无效、切镜阈值曲线与产物路径 |
-| `docs\mpv-dlssg.md` | 把 vdlssg 装进 mpv-lazy：部署清单、`MEMC_DLSSG_NV.vpy` 选项、与 RIFE 脚本的差异、五个坑 |
-| `测试数据\results\report_final.md` | 上述对比的合并报告（含 VMAF/PSNR/SSIM/锐度/耗时） |
+out = core.vdlssg.FrameGen(src, multi=2, scene_threshold=0.25, gpu=0,
+                           proxy_dir=r"E:\code\dlssg-vfi\vs-dlssg\engine45")
+out = core.std.AssumeFPS(out, fpsnum=src.fps_num * 2, fpsden=src.fps_den)
+out.set_output()
+```
+
+其它引擎只是换命名空间与 `multi` 上限（参数完全相同）：
+
+```python
+out = core.vxessfg.FrameGen(src, multi=4, proxy_dir=r"...\engine45_xess")  # 2×–4×
+out = core.vvfg.FrameGen(src, multi=6, proxy_dir=r"...\engine_nvvfx")      # 2×–6×
+out = core.vfsr4.FrameGen(src, multi=2, proxy_dir=r"...\engine_fsrfg")     # 固定 2×
+```
+
+参数、输出帧属性、部署（VapourSynth 插件目录 / mpv-lazy）与已知限制见
+[`vs-dlssg\README.md`](vs-dlssg/README.md)；引擎间的差异与取舍见 `vs-dlssg\docs\engines.md`。
+
+**先了解三条硬约束**：单进程只支持一种帧尺寸；只接受 `RGBS`；插件保持输入 fps 不变而把帧数乘
+`multi`，非 mpv 场景必须自己 `AssumeFPS`，否则播放成慢动作。
+
+## 基准：八个引擎，同一把尺
+
+`bench\` 在同一机器、同一段素材、同一套计时口径下比较吞吐（11 档分辨率，480×270 → 4K）与
+1080p 生成质量（19 个真实中间帧作 GT）。完整报告 `bench\results\report.md`，口径与坑
+`bench\docs\method.md`，图表在 `bench\results\charts\`、对比图在 `bench\results\compare\`。
+
+| | 1080p | 4K | 质量（VMAF） |
+|---|---|---|---|
+| DLSS-G | **8.00 ms/pair** | 29.38 | 58.11（锐度 0.61，最软） |
+| NVIDIA VFG | 19.77 | **22.63**（几乎不随分辨率涨） | 61.43 |
+| XeSS-FG | 37.63 | 142.13 | 59.61 |
+| FSR 4 | 38.19 | 143.98 | 56.15 |
+| RIFE 4.6 | 16.20 | 69.97 | 62.37 |
+| RIFE 4.25 lite | 31.42 | 75.58 | 61.86 |
+| RIFE 4.26 | 37.78 | 83.63 | 62.79 |
+| RIFE 4.26 heavy | 37.34 | 105.92 | **63.19**（19 帧赢 13） |
+
+一句话：DLSS-G 最快但最软，VFG 的耗时几乎与分辨率无关（4K 反超 DLSS-G），XeSS-FG/FSR 4 在 sm_86
+上又慢又差，质量由 RIFE 系列领跑。噪声与异常（同档跨轮 5–40% 漂移）在报告里有清单，别按小数点后
+两位下结论。
 
 ## 目录
 
-| 目录 | 内容 |
-|---|---|
-| `plugin\` | 插件源码（`vdlssg.cpp` / `ngx_session.cpp` / `d3d12_ctx.cpp`）+ `build.bat` |
-| `spike\` | 独立验证程序（不走 VapourSynth，用来做对照实验） |
-| `dist\` | `dlssg_for_sm86` 0.4.2 代理包原件；`smv-dlssg-unlock\` = 给 SmoothMyVideo 用的解锁安装包；`engine45\` = 从 SmoothMyVideo 提取的 DLSS 4.5 引擎包（6×） |
-| `vs-dlssg\` | 可直接分发的成品包（38.6 MB / 25 文件）：`bin\vdlssg.dll`、`src\`（源码 + 独立 `build.bat`）、`engine45\`、`mpv\MEMC_DLSSG_NV.vpy`、`test\`、`docs\`、根 README |
-| `work\` | 代理运行目录（`version.dll`、`dlssg_sm86\`、`dlssg_sm86.ini`）+ 中间产物 |
-| `ngxsdk\` | NVIDIA NGX/Streamline 头文件与 `nvsdk_ngx_d.lib` |
-| `media\` | Sintel 素材、三帧/五帧取样、各模型的跑分脚本 |
-| `test\` | 端到端/吞吐/一致性/日志解析脚本 |
-| `framegen-bench\` | 独立 git 仓库：八引擎（DLSSG/XeSS/VFG/FSR4 + RIFE 四变体）帧生成基准，`src\` 脚本 + `results\` 图表报告；原始数据在 `测试数据\engines\` |
+| 目录 | 内容 | 进 git |
+|---|---|---|
+| `vs-dlssg\src\` | **插件源码**：`frame_gen.cpp`（滤镜 + 切镜检测）、`d3d12_ctx.cpp`、每引擎一个 `*_session.cpp`，`profiles.h` 决定一个 DLL 用哪套；`build.bat` 一次编四个 DLL | ✓ |
+| `vs-dlssg\` | 可直接分发的成品包：`bin\` 四个 DLL、`engine45\` / `engine45_xess\` / `engine_nvvfx\` / `engine_fsrfg\` 引擎包、`mpv\` 脚本、`test\`、`docs\` | 源码 ✓，`bin`/`obj`/`engine*` ✗ |
+| `bench\` | 八引擎基准：`src\` 脚本、`results\` 报告与图表快照、`docs\method.md` | ✓ |
+| `docs\` | 16 篇实测与设计记录（sm86 解锁、吞吐优化、画质对比、mpv 集成） | ✓ |
+| `spike\` | 不依赖 VapourSynth 的验证程序（NGX 调用序列、多帧、运动估计） | ✓ |
+| `test\` | 端到端 / 吞吐 / 一致性 / 日志解析脚本 | ✓ |
+| `media\` | 素材取样与各模型跑分脚本（`sintel_trailer_1080p.mp4` 自行准备） | 脚本 ✓ |
+| `ref\` | RTX Encore 运动估计器的参考源码片段与笔记 | ✓ |
+| `archive\` | 第一代单引擎 `vdlssg`（已被 `vs-dlssg\src` 取代，仅留对照） | ✓ |
+| `测试数据\` | 源帧、各引擎生成帧、指标（7.5 GB） | ✗ |
+| `参考插件\` `测试环境\` | SmoothMyVideo 源码/便携版、mpv-lazy 测试环境（第三方，只读） | ✗ |
+| `work\` `dist\` `rife\` `rife4k\` `ngxsdk\` | 代理运行目录、引擎解锁包、模型、NVIDIA SDK | ✗ |
+
+仓库只有几 MB 源码：生成帧（303 MB）、TRT engine 缓存、引擎包与第三方装包都能重建，不进 git。
 
 ## 构建
 
 ```bat
-cmd /c E:\code\dlssg-vfi\plugin\build.bat
+cmd /c E:\code\dlssg-vfi\vs-dlssg\src\build.bat
 ```
 
-需要 MSVC（`C:\software\msvc`，`vcvars64.bat`）、`ngxsdk\include`、`nvsdk_ngx_d.lib`、
-VapourSynth R74 头文件（`E:\code\VFI\.venv\Lib\site-packages\vapoursynth\include`）。
+依赖（可用环境变量覆盖：`NGX_SDK` / `VS_INCLUDE` / `VCVARS` / `VULKAN_SDK`）：
 
-**必须链动态 `nvsdk_ngx_d.lib`（`/MD`）**：代理只钩真 `_nvngx.dll` 的导出，静态链接方案
-永远装不上钩子。
+- MSVC x64（`C:\software\msvc\VC\Auxiliary\Build\vcvars64.bat`）
+- NGX SDK：`git clone https://github.com/NVIDIA/DLSS ngxsdk`，构建链 `nvsdk_ngx_d.lib`
+- VapourSynth R74+ 头文件（`E:\code\VFI\.venv\Lib\site-packages\vapoursynth\include`）
+- Vulkan SDK（只有 `vfsr4` 用）
+
+**必须链动态 `nvsdk_ngx_d.lib`（`/MD`）**：代理只钩真 `_nvngx.dll` 的导出，静态链接永远装不上钩子。
 
 ## 环境要求
 
-- 真实 `_nvngx.dll` 在 DriverStore（`nv_dispi.inf_amd64_feedb8c0271ca811\`），NGX loader
-  自己会找到，不要拷进项目。
-- `work\dlssg_sm86\logs\` 目录必须预先存在，否则零日志静默失败。
-- 运行目录必须是含 `version.dll` 的目录（代理要被显式拉起）。
+- 真实 `_nvngx.dll` 在 DriverStore（`nv_dispi.inf_amd64_*`），NGX loader 自己会找到，不要拷进项目。
+- `engine45\dlssg_sm86\logs\` 目录必须预先存在，否则零日志静默失败。
+- 运行目录必须是含 `version.dll` 的目录（代理要被显式拉起）；VFG 另需 `winmm.dll` 代理。
+- 每个进程只能初始化一次 NGX：同进程加载两个 NGX 系插件（`vdlssg` / `vxessfg`）会让第二个失败，
+  `vs-dlssg\test\all_engines.py` 因此每个引擎起一个子进程。
+
+## 文档索引
+
+| 文件 | 内容 |
+|---|---|
+| `vs-dlssg\README.md` | 插件组总览：部署、构建、参数表、性能表、已知限制 |
+| `docs\vdlssg-plugin.md` | 插件设计、切镜/抑制/hold 语义、三个已修 bug 与回归入口 |
+| `docs\dlssg-on-3080-spike.md` | 三条硬前提、NGX 调用序列、spike 探针、原始 VMAF/吞吐 |
+| `docs\vdlssg-engines.md` | 接入面实证：NGX 即接口、XeFG 的输入/格式契约、FSR 4.1 Lite 不存在 |
+| `docs\vdlssg-multiframe.md` · `docs\vdlssg45-engine.md` | 2×–6× 语义与 DLSS 4.5 引擎包（`MaxGeneratedFrames=5`） |
+| `docs\vdlssg-throughput.md` | 四处吞吐优化详解（18.9 → 55.15 fps）、踩过的坑 |
+| `docs\vdlssg-vs-rife422-flow.md` · `docs\vdlssg-vs-models.md` | 与 RIFE/FILM/IFRNet/minterpolate 的逐组对比；喂真实光流实测无效 |
+| `docs\engines-benchmark.md` | 八引擎基准摘要（完整报告在 `bench\`） |
+| `docs\smv-dlssg-unlock.md` · `docs\smv-vfg-sm86-unlock.md` | 把 SmoothMyVideo 的 DLSS 4.5 / VFG 解锁到 RTX 20/30 |
+| `docs\hsr6x-measure.md` | 星铁 PV 4K 实测：6× 速度、GT 代理画质、切镜阈值曲线 |
+| `docs\mpv-dlssg.md` | 装进 mpv-lazy：部署清单、脚本选项、五个坑 |
+
+## 致谢与商标
+
+DLSS、NGX、VFG 是 NVIDIA 的技术；XeSS 是 Intel；FSR 是 AMD。引擎包与解锁思路来自
+[SmoothMyVideo](https://github.com/flowreen/SmoothMyVideo)（MIT），RIFE 变体模型来自
+[Practical-RIFE](https://github.com/hzwer/Practical-RIFE)，TensorRT 包装参考
+[vs-mlrt](https://github.com/AmusementClub/vs-mlrt)。本仓库只做宿主编排与测量，不含上游模型的训练产物。

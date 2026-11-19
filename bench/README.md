@@ -1,4 +1,6 @@
-# framegen-bench — 八引擎视频插帧基准
+# bench — 八引擎视频插帧基准
+
+`vs-framegen` 仓库的一部分：插件源码在 `../vs-dlssg/src`，这里只放基准。
 
 在同一台机器、同一段素材、同一套计时口径下，横向比较 8 个 2 倍速帧生成引擎的
 **吞吐随分辨率的变化**与 **1080p 生成质量**。
@@ -139,7 +141,7 @@ TRT bucket）、`probe_vfg_size.py`（VFG 尺寸敏感性）。
 ## 目录
 
 ```
-framegen-bench/
+bench/
 ├─ src/
 │  ├─ common.py          素材、分辨率阶梯、引擎表、读图辅助（唯一配置入口）
 │  ├─ smv_run.py         smv-live 离线宿主封装（解析 stderr 的 ms/pair）
