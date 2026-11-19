@@ -1,0 +1,20 @@
+# 中间产物：随跑随生，不进仓库
+__pycache__/
+*.py[cod]
+*.pyo
+
+# 生成帧序列（303.9 MB，留在数据目录）
+results/quality/
+
+# 原始流 / 日志 / TRT engine
+*.raw
+*.out
+*.err
+*.log
+*.engine
+*.cubin
+
+# 临时 / 编辑器
+.vscode/
+.history/
+tmp/

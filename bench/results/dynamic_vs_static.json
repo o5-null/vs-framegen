@@ -1,0 +1,15 @@
+{
+ "probe": "test/engines/probe_dynamic_engine.py",
+ "model": "rife_v4.6.onnx",
+ "note": "static = one engine per resolution (min = opt = max, what run_throughput.py uses); dynamic = single engine, profile min 384x640 / opt 1088x1920 / max 2176x3840. 20 iterations, upload + enqueue + sync, no download. Shapes are the tile-padded ones the runner actually uses.",
+ "static": "min=opt=max, one engine per resolution",
+ "dynamic_profile": {"min": [1, 11, 384, 640], "opt": [1, 11, 1088, 1920], "max": [1, 11, 2176, 3840]},
+ "iterations": 20,
+ "rows": [
+  {"res": "1280x720", "padded": [1280, 736], "static_ms": 5.76, "dynamic_ms": 6.21, "drift_pct": 7.8},
+  {"res": "1920x1080", "padded": [1920, 1088], "static_ms": 11.65, "dynamic_ms": 12.00, "drift_pct": 3.0},
+  {"res": "2560x1440", "padded": [2560, 1440], "static_ms": 21.29, "dynamic_ms": 23.75, "drift_pct": 11.6},
+  {"res": "3840x2160", "padded": [3840, 2176], "static_ms": 47.52, "dynamic_ms": 46.13, "drift_pct": -2.9}
+ ],
+ "mean_ratio": 1.049
+}
