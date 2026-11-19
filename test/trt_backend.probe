@@ -1,0 +1,14 @@
+[32m2026-11-16 21:17:54.286[0m | [34m[1mDEBUG   [0m | [36mcore.io.data_validator[0m:[36mregister_schema[0m:[36m242[0m - [34m[1mRegistered schema: config[0m
+[32m2026-11-16 21:17:54.286[0m | [34m[1mDEBUG   [0m | [36mcore.io.data_validator[0m:[36mregister_schema[0m:[36m242[0m - [34m[1mRegistered schema: preset[0m
+[32m2026-11-16 21:17:54.287[0m | [34m[1mDEBUG   [0m | [36mcore.io.data_validator[0m:[36mregister_schema[0m:[36m242[0m - [34m[1mRegistered schema: queue[0m
+[32m2026-11-16 21:17:54.287[0m | [34m[1mDEBUG   [0m | [36mcore.io.export_import_manager[0m:[36m_register_default_schemas[0m:[36m127[0m - [34m[1mDefault schemas registered[0m
+[32m2026-11-16 21:17:54.287[0m | [1mINFO    [0m | [36mcore.io.export_import_manager[0m:[36mimport_data[0m:[36m227[0m - [1mImported from E:\code\VFI\VFI-gui\config\runtime.json[0m
+[32m2026-11-16 21:17:54.287[0m | [34m[1mDEBUG   [0m | [36mcore.config.base_config[0m:[36mload[0m:[36m47[0m - [34m[1mRuntimeConfig loaded from: E:\code\VFI\VFI-gui\config\runtime.json[0m
+MOD tensorrt_rtx   MISSING ModuleNotFoundError
+MOD tensorrt       10.16.1.11
+MOD onnx           MISSING ModuleNotFoundError
+MOD onnxruntime    1.24.4
+MOD pycuda         MISSING ModuleNotFoundError
+MOD cuda           MISSING ModuleNotFoundError
+BACKENDS ['BackendType.DIRECTML', 'BackendType.NCNN', 'BackendType.ONNX', 'BackendType.TENSORRT_RTX', 'BackendType.TORCH']
+HAS_TRT_RTX True

@@ -1,0 +1,59 @@
+# ── 第三方 / 参考 / 大体积素材，不进仓库 ──────────────────────────────
+# 参考插件: SmoothMyVideo 源码与便携版（6 GB，只读参考）
+/参考插件/
+# 测试环境: mpv-lazy 便携版 + vs-plugins（4.7 GB）
+/测试环境/
+# 测试数据: 源帧、各引擎生成帧、raw 序列（7.5 GB，报告快照在 bench\results）
+/测试数据/
+# 代理运行目录与中间产物（TRT engine 缓存、日志）
+/work/
+# 从 SmoothMyVideo 提取/打包的引擎与解锁包（1 GB）
+/dist/
+# RIFE / ONNX 模型与 RTX runtime 实验目录
+/rife/
+/rife4k/
+# VS Code 本地历史
+/.history/
+.history/
+# 参考实现（第三方的 encore-mod 副本，含 222 MB 二进制代理）
+/ref/encore-mod/
+
+# ── 构建产物 ────────────────────────────────────────────────────────
+*.obj
+*.exe
+*.dll
+*.lib
+*.exp
+*.pdb
+*.ilk
+*.res
+/vs-dlssg/bin/
+/vs-dlssg/obj/
+/vs-dlssg/engine45/
+/vs-dlssg/engine45_xess/
+/vs-dlssg/engine_nvvfx/
+/vs-dlssg/engine_fsrfg/
+/archive/**/*.obj
+/archive/**/*.dll
+
+# ── NVIDIA SDK（DLSS SDK 是一个独立 git clone；克隆到 ngxsdk\ 或设 NGX_SDK 覆盖）──
+/ngxsdk/
+
+# ── 媒体素材 ────────────────────────────────────────────────────────
+/media/frames/
+/media/seq/
+/media/review/
+/media/*.mp4
+/media/*.ffindex
+
+# ── 跑测残留 ────────────────────────────────────────────────────────
+*.log
+*.out
+*.err
+*.ppm
+*.raw
+*.engine
+*.cubin
+__pycache__/
+*.py[cod]
+.vscode/
