@@ -14,10 +14,10 @@ import vapoursynth as vs
 core = vs.core
 
 PLAN = [
-    ("dlss", "vdlssg", 4, "engine45"),
-    ("xess", "vxessfg", 4, "engine45_xess"),
-    ("vfg", "vvfg", 4, "engine_nvvfx"),
-    ("fsr4", "vfsr4", 2, "engine_fsrfg"),
+    ("dlss", "vdlssg", 4, "dlss45"),
+    ("xess", "vxessfg", 4, "xessfg"),
+    ("vfg", "vvfg", 4, "vfg"),
+    ("fsr4", "vfsr4", 2, "fsr4"),
 ]
 
 
@@ -39,7 +39,7 @@ def run_one(label):
     src = core.ffms2.Source(os.path.join(pkg, "..", "media", "sintel_trailer_1080p.mp4"))
     src = core.resize.Bicubic(src, format=vs.RGBS, matrix_in_s="709")
     src = core.std.Trim(src, 90, 93)
-    clip = getattr(core, fn).FrameGen(src, multi=multi, proxy_dir=os.path.join(pkg, proxy), log=0)
+    clip = getattr(core, fn).FrameGen(src, multi=multi, proxy_dir=os.path.join(pkg, "bin", proxy), log=0)
     frames = [np.asarray(clip.get_frame(i)) for i in range(len(clip))]
     repeats = sum(1 for a, b in zip(frames, frames[1:]) if float(np.abs(a - b).mean()) < 1e-4)
     # The tail of the sequence holds the last source frame in the remaining slots; anything else repeating

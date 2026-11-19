@@ -8,7 +8,7 @@ import os
 import vapoursynth as vs
 
 core = vs.core
-core.std.LoadPlugin(path=r"E:\code\dlssg-vfi\plugin\vdlssg.dll")
+core.std.LoadPlugin(path=r"E:\code\dlssg-vfi\vs-dlssg\bin\vdlssg.dll")
 
 MULTI = int(os.environ.get("VDLSSG_MULTI", "3"))
 SIZE = os.environ.get("VDLSSG_SIZE", "4k")

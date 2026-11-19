@@ -29,7 +29,7 @@ core.std.LoadPlugin(path=os.path.join(pkg, "bin", "vvfg.dll"))
 src = core.ffms2.Source(os.path.join(pkg, "..", "media", "sintel_trailer_1080p.mp4"))
 src = core.resize.Bicubic(src, format=vs.RGBS, matrix_in_s="709")
 src = core.std.Trim(src, 90, 93)
-clip = core.vvfg.FrameGen(src, multi=multi, proxy_dir=os.path.join(pkg, "engine_nvvfx"), log=1)
+clip = core.vvfg.FrameGen(src, multi=multi, proxy_dir=os.path.join(pkg, "vfg"), log=1)
 
 n = len(clip)
 prev = None

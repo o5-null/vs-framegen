@@ -72,7 +72,7 @@ bool Fsr4Session::Impl::init(const fg::Config& cfg, std::string& error) {
     return false;
   }
   if (config.proxyDir.empty()) {
-    error = "vfsr4: the engine_fsrfg directory is not known";
+    error = "vfsr4: bin\\fsr4 not found beside the plugin DLL; point proxy_dir at it";
     return false;
   }
   if (!bridge.open(config.proxyDir, error)) return false;

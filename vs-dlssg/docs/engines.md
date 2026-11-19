@@ -4,10 +4,10 @@
 
 | 插件 | 引擎 | 产物 | 引擎包目录 | `multi` | 输入纹理 |
 |---|---|---|---|---|---|
-| `vdlssg.FrameGen` | NVIDIA DLSS-G（sm86 解锁） | `bin\vdlssg.dll` | `engine45\` | 2–6 | RGBA16F |
-| `vxessfg.FrameGen` | Intel XeSS-FG model 15/18 | `bin\vxessfg.dll` | `engine45_xess\` | 2–4 | R10G10B10A2 |
-| `vvfg.FrameGen` | NVIDIA Video Frame Generation | `bin\vvfg.dll` | `engine_nvvfx\` | 2–6 | R10G10B10A2 |
-| `vfsr4.FrameGen` | AMD FSR 4 帧生成（SmoothMyVideo 桥 + FSR runtime） | `bin\vfsr4.dll` | `engine_fsrfg\` | 2（固定） | RGBA16F（可退 RGBA8） |
+| `vdlssg.FrameGen` | NVIDIA DLSS-G（sm86 解锁） | `bin\vdlssg.dll` | `dlss45\` | 2–6 | RGBA16F |
+| `vxessfg.FrameGen` | Intel XeSS-FG model 15/18 | `bin\vxessfg.dll` | `xessfg\` | 2–4 | R10G10B10A2 |
+| `vvfg.FrameGen` | NVIDIA Video Frame Generation | `bin\vvfg.dll` | `vfg\` | 2–6 | R10G10B10A2 |
+| `vfsr4.FrameGen` | AMD FSR 4 帧生成（SmoothMyVideo 桥 + FSR runtime） | `bin\vfsr4.dll` | `fsr4\` | 2（固定） | RGBA16F（可退 RGBA8） |
 
 四个插件共用同一份 `frame_gen.cpp`（帧映射、切镜检测、属性输出）与同一套参数，只有 `profiles.h` 的六个宏与 `*_session.cpp` 不同。想加第五个引擎，只需再写一个 session 类并加一个 profile。
 
@@ -41,7 +41,7 @@ VFG 比 DLSS-G 慢约 3.5 倍（模型本身重，且每个中间帧要一条独
 
 ## XeSS-FG
 
-不需要 Intel 的 `libxess_fg.dll`：`dlssg_for_sm86` 0.4.2 的代理里已经把 XeSS-FG 的两个模型（model 15 = 2X、model 18 = 4X 图）编译成自己的 CUDA kernel，放在 `dlssg_sm86\xefg\xefg_kernels.dll`。所以只要把 `engine45\` 整目录复制成 `engine45_xess\`，再把 `dlssg_sm86.ini` 改成：
+不需要 Intel 的 `libxess_fg.dll`：`dlssg_for_sm86` 0.4.2 的代理里已经把 XeSS-FG 的两个模型（model 15 = 2X、model 18 = 4X 图）编译成自己的 CUDA kernel，放在 `dlssg_sm86\xefg\xefg_kernels.dll`。所以只要把 `dlss45\` 整目录复制成 `xessfg\`，再把 `dlssg_sm86.ini` 改成：
 
 ```ini
 [FrameGeneration]
@@ -56,12 +56,12 @@ UseHudless=Auto
 - `MaxGeneratedFrames` 最大 3（4× 输出）；超过 3 代理直接拒绝（`max_generated_frames_unsupported`）。
 - XeSS 只收 8/10-bit backbuffer，插件因此把颜色纹理切成 `R10G10B10A2_UNORM`（`d3d12_ctx` 的 `colorFormat` 参数）：RGBA16F 会被判 `backbuffer_format_<n>` 并 `xefg_feature_refused`。
 - 深度与运动矢量是硬要求（XeSS 用 Warp 做遮挡）。插件沿用 DLSS 的做法：深度填常量 0.5、没给 `mv` 时填零场。XeSS 比 DLSS-G 慢，但在 1080p 上仍是 1–3 ms/张量级。
-- 日志证据（`engine45_xess\dlssg_sm86\logs\dlssg_sm86.log`）：`"engine":"XeSS-FG model 15 ..."`、`"colour_format":"R10G10B10A2_UNORM"`、`"event":"xefg_reset" ... "graph":"2x"`、`"cuda_image":"cubin_sm86"`。
+- 日志证据（`xessfg\dlssg_sm86\logs\dlssg_sm86.log`）：`"engine":"XeSS-FG model 15 ..."`、`"colour_format":"R10G10B10A2_UNORM"`、`"event":"xefg_reset" ... "graph":"2x"`、`"cuda_image":"cubin_sm86"`。
 - 实测：1080p 四倍帧 `Output 96 frames in 1.09 seconds (87.87 fps)`（24 源帧，`test\xess4.vpy`）。
 
 ## NVIDIA VFG
 
-`vvfg` 直接调 NVIDIA Video Effects SDK 的 `nvVFXVideoFrameGeneration.dll`（`engine_nvvfx\` 四个文件：`NVCVImage.dll`、`NVVideoEffects.dll`、`nvVFXVideoFrameGeneration.dll`、`cudart64_12.dll`）。它只带 sm_89 / sm_120 两种 cubin，RTX 30（sm_86）要解锁，否则模型加载报 `the model's load failed: unknown error (status -1999)`。
+`vvfg` 直接调 NVIDIA Video Effects SDK 的 `nvVFXVideoFrameGeneration.dll`（`vfg\` 四个文件：`NVCVImage.dll`、`NVVideoEffects.dll`、`nvVFXVideoFrameGeneration.dll`、`cudart64_12.dll`）。它只带 sm_89 / sm_120 两种 cubin，RTX 30（sm_86）要解锁，否则模型加载报 `the model's load failed: unknown error (status -1999)`。
 
 解锁在插件进程内完成（不需要 `winmm.dll` 代理，也不需要改参考插件）：`vfg_session.cpp` 在 `LoadLibrary` 之后、`NvVFX_Load` 之前改 `nvVFXVideoFrameGeneration.dll` 自己的导入表，把 `nvcuda.dll` 的两个槽换成 hook：
 
@@ -87,9 +87,9 @@ UseHudless=Auto
 
 ## AMD FSR 4
 
-`vfsr4` 不碰 AMD 的 D3D12 API，也不走 NGX：它加载 `engine_fsrfg\smv_fsrfg_bridge.dll`（SmoothMyVideo 的桥），桥自己用 `smv_vkd3d_d3d12.dll`（打过补丁的 vkd3d-proton）建一个 D3D12 设备，创出 `in`（颜色）、`mv`（R16G16F 运动矢量）、`out`（结果）三张共享纹理和一条共享 fence，把 NT 句柄交给宿主导入。`amd_fidelityfx_framegeneration_dx12.dll` + `amd_fidelityfx_loader_dx12.dll` 是 AMD 的 FSR 运行时，`amdxc64.dll` 是桥的 stand-in。
+`vfsr4` 不碰 AMD 的 D3D12 API，也不走 NGX：它加载 `fsr4\smv_fsrfg_bridge.dll`（SmoothMyVideo 的桥），桥自己用 `smv_vkd3d_d3d12.dll`（打过补丁的 vkd3d-proton）建一个 D3D12 设备，创出 `in`（颜色）、`mv`（R16G16F 运动矢量）、`out`（结果）三张共享纹理和一条共享 fence，把 NT 句柄交给宿主导入。`amd_fidelityfx_framegeneration_dx12.dll` + `amd_fidelityfx_loader_dx12.dll` 是 AMD 的 FSR 运行时，`amdxc64.dll` 是桥的 stand-in。
 
-**关键：三张纹理只能用 Vulkan 导入。** SMV 的 vkd3d 补丁（`engine_fsrfg\source\vkd3d-proton-bfdb811-smv.patch`）在 `CreateSharedHandle` 里删掉了 `D3DKMTShareObjects`，直接返回 Vulkan 的 OPAQUE_WIN32 导出句柄，并且不再登记到 vkd3d 自己的 shared-handle 表。实测：`ID3D12Device::OpenSharedHandle` 在该资源上返回 `E_INVALIDARG`（vkd3d）或让进程直接退出（系统 d3d12）；CUDA 12 的 `cuImportExternalMemory`（OPAQUE_WIN32 / KMT / dedicated / size 0 全试过）一律 `CUDA_ERROR_INVALID_VALUE`；只有系统 D3D12 能打开 fence。所以 `fsr4_vk.cpp` 用 Vulkan 按 LUID 选同一块显卡，`vkGetMemoryWin32HandlePropertiesKHR` 判断句柄类型（实测颜色/运动/输出都是 `VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D12_RESOURCE_BIT` = 0x40，线性 tiling 可用，导出特性 `EXPORTABLE|IMPORTABLE`；fence 是 `D3D12_FENCE_BIT` = 0x8 的 timeline 信号量），dedicated import 后只在 TRANSFER_SRC/DST 里用，所有拷贝都在 `GENERAL` 布局完成。
+**关键：三张纹理只能用 Vulkan 导入。** SMV 的 vkd3d 补丁（`fsr4\source\vkd3d-proton-bfdb811-smv.patch`）在 `CreateSharedHandle` 里删掉了 `D3DKMTShareObjects`，直接返回 Vulkan 的 OPAQUE_WIN32 导出句柄，并且不再登记到 vkd3d 自己的 shared-handle 表。实测：`ID3D12Device::OpenSharedHandle` 在该资源上返回 `E_INVALIDARG`（vkd3d）或让进程直接退出（系统 d3d12）；CUDA 12 的 `cuImportExternalMemory`（OPAQUE_WIN32 / KMT / dedicated / size 0 全试过）一律 `CUDA_ERROR_INVALID_VALUE`；只有系统 D3D12 能打开 fence。所以 `fsr4_vk.cpp` 用 Vulkan 按 LUID 选同一块显卡，`vkGetMemoryWin32HandlePropertiesKHR` 判断句柄类型（实测颜色/运动/输出都是 `VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D12_RESOURCE_BIT` = 0x40，线性 tiling 可用，导出特性 `EXPORTABLE|IMPORTABLE`；fence 是 `D3D12_FENCE_BIT` = 0x8 的 timeline 信号量），dedicated import 后只在 TRANSFER_SRC/DST 里用，所有拷贝都在 `GENERAL` 布局完成。
 
 **fence 协议**（每次 `generate` 一轮，严格 +1）：
 

@@ -1,7 +1,7 @@
 // fsr4_vk_probe.cpp - standalone probe: can a Vulkan host consume the FSR
 // bridge's shared textures and timeline semaphore?
 //
-// The bundled vkd3d-proton is patched (see engine_fsrfg/source/*.patch) so that
+// The bundled vkd3d-proton is patched (see fsr4/source/*.patch) so that
 // CreateSharedHandle returns the *raw* Vulkan OPAQUE_WIN32 export instead of a
 // D3DKMT share. That handle is a DxgkSharedResource kernel object which neither
 // D3D12 nor CUDA will import here, so the only left path is Vulkan itself:
@@ -152,7 +152,7 @@ int main(int argc, char** argv) {
 
   // ---- bridge ------------------------------------------------------------
   const wchar_t* bridgePath =
-      L"E:\\code\\dlssg-vfi\\vs-dlssg\\engine_fsrfg\\smv_fsrfg_bridge.dll";
+      L"E:\\code\\dlssg-vfi\\vs-dlssg\\fsr4\\smv_fsrfg_bridge.dll";
   HMODULE bridge = LoadLibraryExW(bridgePath, nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
   if (!bridge) {
     std::printf("FAIL: bridge load, GetLastError %lu\n", GetLastError());

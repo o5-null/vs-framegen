@@ -14,10 +14,10 @@ VapourSynth 的补帧插件组：默认是 DLSS-G（`vdlssg.FrameGen`），带�
 | `bin\vdlssg.dll` `bin\vxessfg.dll` `bin\vvfg.dll` `bin\vfsr4.dll` | 编译产物（x64），一个引擎一个插件 |
 | `src\*.cpp` `src\*.h` | 共用 `frame_gen.cpp`（滤镜、切镜检测）+ `d3d12_ctx.cpp`（D3D12 上下文）+ 各引擎的 `*_session.cpp`；`profiles.h` 决定一个 DLL 用哪套 |
 | `src\build.bat` | MSVC 构建脚本，一次编四个 DLL，`NGX_SDK` / `VS_INCLUDE` / `VCVARS` 可用环境变量覆盖 |
-| `engine45\` | DLSS 4.5 引擎包：`version.dll` 解锁代理 + `dlssg_sm86\`（backend/kernels/runtime/xefg）+ `dlssg_sm86.ini`（`MaxGeneratedFrames=5`，即单趟 6×） |
-| `engine45_xess\` | 同一引擎包，`Engine=XeSS`、`MaxGeneratedFrames=3`（XeSS-FG，4×） |
-| `engine_nvvfx\` | NVIDIA Video Effects SDK 四文件（VFG，进程内 IAT 解锁 sm_89 内核） |
-| `engine_fsrfg\` | FSR 4 桥：`smv_fsrfg_bridge.dll` + AMD 签名 DLL + vkd3d-proton |
+| `bin\dlss45\` | DLSS 4.5 引擎包：`version.dll` 解锁代理 + `dlssg_sm86\`（backend/kernels/runtime/xefg）+ `dlssg_sm86.ini`（`MaxGeneratedFrames=5`，即单趟 6×） |
+| `bin\xessfg\` | 同一引擎包，`Engine=XeSS`、`MaxGeneratedFrames=3`（XeSS-FG，4×） |
+| `bin\vfg\` | NVIDIA Video Effects SDK 四文件（VFG，进程内 IAT 解锁 sm_89 内核） |
+| `bin\fsr4\` | FSR 4 桥：`smv_fsrfg_bridge.dll` + AMD 签名 DLL + vkd3d-proton |
 | `test\` | `mf6.vpy`（DLSS 6×）、`xess4.vpy`、`vfg4.vpy`、`fsr4.vpy`、`all_engines.py`（四引擎各起子进程跑一遍）、`smoke.py` |
 | `mpv\MEMC_DLSSG_NV.vpy` | mpv-lazy 用的一键补帧脚本 |
 | `docs\` | 引擎对比（`engines.md`）、mpv 接入、插件参数、多帧语义、4K 实测 |
@@ -25,16 +25,16 @@ VapourSynth 的补帧插件组：默认是 DLSS-G（`vdlssg.FrameGen`），带�
 
 ## 部署
 
-**VapourSynth**：把 `bin\vdlssg.dll` 与整个 `engine45\` 放到同一个插件目录，例如
+**VapourSynth**：把 `bin\vdlssg.dll` 和整个 `bin\dlss45\` **平铺**到同一个插件目录，例如
 
 ```
 <vapoursynth>\vapoursynth64\plugins\vdlssg.dll
-<vapoursynth>\vapoursynth64\plugins\engine45\...
+<vapoursynth>\vapoursynth64\plugins\dlss45\...
 ```
 
-插件默认优先加载 `<DLL 所在目录>\engine45\version.dll`，找不到才回落到 DLL 目录本身（那就只有原版 4× 上限）。`engine45\dlssg_sm86\logs\` 必须存在。
+插件默认优先加载 `<DLL 所在目录>\dlss45\version.dll`，找不到才回落到 DLL 目录本身（那就只有原版 4× 上限）。`dlss45\dlssg_sm86\logs\` 必须存在。
 
-**mpv-lazy**：`vs-plugins\vdlssg.dll` + `vs-plugins\engine45\`，再把 `mpv\MEMC_DLSSG_NV.vpy` 放到 `portable_config\vs\`，菜单里执行 `vf set vapoursynth="~~/vs/MEMC_DLSSG_NV.vpy"`。详见 `docs\mpv-dlssg.md`。
+**mpv-lazy**：`vs-plugins\vdlssg.dll` + `vs-plugins\dlss45\`，再把 `mpv\MEMC_DLSSG_NV.vpy` 放到 `portable_config\vs\`，菜单里执行 `vf set vapoursynth="~~/vs/MEMC_DLSSG_NV.vpy"`。详见 `docs\mpv-dlssg.md`。
 
 ## 构建
 
@@ -64,7 +64,7 @@ out = core.vdlssg.FrameGen(
     multi=6,                 # 2..6，输出 multi 倍帧数
     scene_threshold=0.25,    # 0 关闭切镜检测
     gpu=0,
-    proxy_dir=r"E:\...\vs-dlssg\engine45",   # 可省略：默认 <DLL 目录>\engine45
+    proxy_dir=r"E:\...\vs-dlssg\dlss45",   # 可省略：默认 <DLL 目录>\dlss45
 )
 out = core.std.AssumeFPS(out, fpsnum=src.fps_num * 6, fpsden=src.fps_den)
 out.set_output()
@@ -75,7 +75,7 @@ out.set_output()
 | `multi` | 2 | 2..6；每对相邻帧插 `multi-1` 张，帧率正好乘 `multi` |
 | `mv` | 无 | 可选光流剪辑（RGB，2 或 3 平面，全尺寸或半尺寸）。**实测这颗运行库基本不使用 mvec**（±30 px 常数场只让输出变化 1.5e-4），可以不给 |
 | `scene_threshold` | 0.15 | 相邻帧三平面 8 采样平均绝对差超过它就判切镜、该对直接 hold。快节奏素材建议 0.25–0.35：实测该片 10 s 内 0.15 会 hold 掉 11% 的帧对 |
-| `proxy_dir` | `<DLL 目录>\engine45` | 引擎包目录，必须含 `version.dll` 与 `dlssg_sm86\` |
+| `proxy_dir` | `<DLL 目录>\dlss45` | 引擎包目录，必须含 `version.dll` 与 `dlssg_sm86\` |
 | `gpu` | 0 | 适配器序号 |
 | `camera` | 0 | 相机类型（0 默认 / 1 第一人称 / 2 第三人称 / 3 工具） |
 | `log` | 0 | 每帧向 stderr 打一行毫秒数 |
@@ -85,9 +85,9 @@ out.set_output()
 其它引擎只是换命名空间与 `multi` 上限（参数完全相同）：
 
 ```python
-out = core.vxessfg.FrameGen(src, multi=4, proxy_dir=r"...\engine45_xess")  # Intel XeSS-FG，2×–4×
-out = core.vvfg.FrameGen(src, multi=6, proxy_dir=r"...\engine_nvvfx")      # NVIDIA VFG，2×–6×
-out = core.vfsr4.FrameGen(src, multi=2, proxy_dir=r"...\engine_fsrfg")     # AMD FSR 4
+out = core.vxessfg.FrameGen(src, multi=4, proxy_dir=r"...\xessfg")  # Intel XeSS-FG，2×–4×
+out = core.vvfg.FrameGen(src, multi=6, proxy_dir=r"...\vfg")      # NVIDIA VFG，2×–6×
+out = core.vfsr4.FrameGen(src, multi=2, proxy_dir=r"...\fsr4")     # AMD FSR 4
 ```
 
 VFG 每个中间帧要一条独立 CUDA context（模型把「上一帧」状态存在 context 里），1080p 约 1.4 GB 显存 + 0.5–0.7 s 建 lane，6× 在 10 GB 卡上可行、4K 不可行，细节见 `docs\engines.md`。

@@ -1,7 +1,7 @@
 # DLSS-G 多帧生成能不能迁移到视频
 
 结论：**能，`multi=2..6` 已在插件里落地**（2–4× 有完整质量/吞吐数据，6× 需随包
-`dist\engine45`，见 §6）；但单帧质量随 `multi` 增大而下降，且插值时刻被锁死在等分点上
+`vs-dlssg\bin\dlss45`，见 §6）；但单帧质量随 `multi` 增大而下降，且插值时刻被锁死在等分点上
 （1/multi、2/multi…），不能像 RIFE 那样指定任意 timestep。
 
 ## 1. 参数语义（SDK 层）
@@ -19,7 +19,7 @@ unsigned int multiFrameIndex = 1;   // 从 1 起，到 multiFrameCount（含）
 
 本机 stock 代理实测 `DLSSG.MultiFrameCountMax = 3`（即最多 4×）。插件的 `multi` 参数范围
 是 2..6，运行时上限在读该参数后二次校验，`multi-1 > multiFrameCountMax` 时直接报错，不会
-静默降级。**6× 只有换 `MaxGeneratedFrames=5` 的引擎包才成立**（`dist\engine45`，同一份
+静默降级。**6× 只有换 `MaxGeneratedFrames=5` 的引擎包才成立**（`vs-dlssg\bin\dlss45`，同一份
 310.9.16 运行库，只改 ini），详见 `docs\vdlssg45-engine.md`。
 
 ## 2. 一个必须知道的运行库行为：抑制标志
@@ -85,20 +85,20 @@ unsigned int multiFrameIndex = 1;   // 从 1 起，到 multiFrameCount（含）
 实际选择看源帧率：24 fps 素材做 3× 需要 72 fps 输出（1080p 满足、4K 不满足）；
 做 4× 需要 96 fps 输出（1080p 勉强、4K 不行）。
 
-## 6. 6× 与 `dist\engine45`
+## 6. 6× 与 `vs-dlssg\bin\dlss45`
 
 `MaxGeneratedFrames` 是 `dlssg_sm86` 代理 ini 里的开关（不是运行库版本差异）：
 
 | 值 | MultiFrameCountMax | 最高倍率 | 文件 |
 |---|---|---|---|
 | 3 | 3 | 4× | stock `dist\dlssg_sm86.ini`、`work\dlssg_sm86.ini` |
-| 5 | 5 | **6×** | `dist\engine45\dlssg_sm86.ini`（从 SmoothMyVideo 提取） |
+| 5 | 5 | **6×** | `vs-dlssg\bin\dlss45\dlssg_sm86.ini`（从 SmoothMyVideo 提取） |
 
 - 运行库本体逐字节相同（`nvngx_dlssg.dll` 310.9.16，SHA256
   `CADEE1AA6DB3907BABDC3285DA2AEBC4553D92B89C38BA3EAE8ABD8BBA1BEA72`），
   SmoothMyVideo 只是把 ini 提到 5，所以这里的"提取 4.5 引擎"= 6× 上限 + 自包含目录。
 - 插件 `multi=6` → `multiFrameCount=5`、`multiFrameIndex=1..5`，与引擎自报上限一致。
-- 已验证：`dist\engine45\smoke.py 640 360 5 6` 走 SMV 的 `dlssg2f.exe --server`，
+- 已验证：`vs-dlssg\bin\dlss45\smoke.py 640 360 5 6` 走 SMV 的 `dlssg2f.exe --server`，
   handshake `gen=5 max=5`，25 帧 `(6-1)*5`，质心误差 ≤2 px（子像素取整）。
 - 未验证：6× 的 MAE/VMAF 与吞吐（`parity3.py` / `bench_multi.py` 目前只测到 4×）。
   按 §4 的趋势（4× 已是 2× 的 1.9 倍 MAE），6× 每张中间帧质量预计继续下降；
@@ -107,7 +107,7 @@ unsigned int multiFrameIndex = 1;   // 从 1 起，到 multiFrameCount（含）
 
 ## 7. 结论
 
-- `multi=3/4` 在架构上完全可行，插件已实现并端到端跑通；`multi=5/6` 走 `dist\engine45`
+- `multi=3/4` 在架构上完全可行，插件已实现并端到端跑通；`multi=5/6` 走 `vs-dlssg\bin\dlss45`
   引擎包也同样成立（上限由 ini 决定），只是还没有专门的质量/吞吐测量。
 - 质量与吞吐两边都不占优：**2× 是画质最优点**，多帧只在"必须把 24 fps 素材硬拉到 60/120 fps"
   这类场景才有意义，且要接受每帧质量下降约 0.6–1.9 倍 MAE。

@@ -128,7 +128,7 @@ def main():
         paths_u, paths_v = hsr_flow.backward_flows(thin, tag)
         kwargs["mv"] = hsr_flow.mv_clip(core, thin, paths_u, paths_v)
     out = core.vdlssg.FrameGen(thin, multi=MULTI, scene_threshold=SCENE,
-                               proxy_dir=os.path.join(ROOT, "dist", "engine45"), log=0, **kwargs)
+                               proxy_dir=os.path.join(ROOT, ""vs-dlssg", "bin", "dlss45"), log=0, **kwargs)
 
     for k, _ in CMP:
         os.makedirs(os.path.join(OUT, "slot%d" % k), exist_ok=True)

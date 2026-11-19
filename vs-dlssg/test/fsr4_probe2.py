@@ -16,7 +16,7 @@ src = core.std.Trim(src, 90, 95)
 print("source", src.width, src.height, src.num_frames, flush=True)
 
 try:
-    out = core.vfsr4.FrameGen(src, multi=2, proxy_dir=os.path.join(PKG, "engine_fsrfg"), log=1)
+    out = core.vfsr4.FrameGen(src, multi=2, proxy_dir=os.path.join(PKG, "fsr4"), log=1)
     print("graph built", out.num_frames, flush=True)
 except Exception:
     traceback.print_exc()

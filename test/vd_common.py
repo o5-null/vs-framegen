@@ -12,7 +12,7 @@ import numpy as np
 DATA = r"E:\code\dlssg-vfi\测试数据"
 PNG_DIR = os.path.join(DATA, "1080p")
 RESULTS = os.path.join(DATA, "results")
-PLUGIN = r"E:\code\dlssg-vfi\plugin\vdlssg.dll"
+PLUGIN = r"E:\code\dlssg-vfi\vs-dlssg\bin\vdlssg.dll"
 PROXY = r"E:\code\dlssg-vfi\work"
 
 METHODS = ("rife422", "dlssg", "dlssg_mv", "dlssg_mvenc")

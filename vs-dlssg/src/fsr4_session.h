@@ -1,7 +1,7 @@
 #pragma once
 // AMD FSR 4 frame generation for the vfsr4 plugin.
 //
-// The work happens in engine_fsrfg\smv_fsrfg_bridge.dll, which runs FSR on vkd3d-proton (Vulkan) and
+// The work happens in fsr4\smv_fsrfg_bridge.dll, which runs FSR on vkd3d-proton (Vulkan) and
 // exposes three shared textures and a fence; this session owns the bridge instance, the D3D12 side
 // that copies frames in and out, and the per-process singleton the plugin needs.
 

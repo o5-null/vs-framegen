@@ -1,4 +1,4 @@
-# NVIDIA Video Frame Generation smoke: 1080p source through engine_nvvfx (Video Effects SDK 1.3).
+# NVIDIA Video Frame Generation smoke: 1080p source through vfg (Video Effects SDK 1.3).
 # Run:  vspipe -p test\vfg4.vpy NUL
 # Needs the in-process sm_89 -> sm_86 unlock, which vfg_session.cpp installs on the model DLL's IAT.
 import os
@@ -38,7 +38,7 @@ src = core.std.Trim(src, 90, 113)   # 24 source frames -> 24*MULTI output frames
 out = core.vvfg.FrameGen(
     src,
     multi=MULTI,
-    proxy_dir=os.path.join(PKG, "engine_nvvfx"),
+    proxy_dir=os.path.join(PKG, "vfg"),
     log=1,
 )
 out.set_output()

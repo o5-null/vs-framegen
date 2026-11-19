@@ -18,7 +18,7 @@
 #define FG_SESSION_NS vdlssg
 #define FG_SESSION_CLASS NgxSession
 // The extracted DLSS 4.5 engine pack (version.dll proxy + dlssg_sm86\).
-#define FG_PROXY_DIR L"engine45"
+#define FG_PROXY_DIR L"dlss45"
 
 #elif defined(FG_PLUGIN_VXESSFG)
 
@@ -30,7 +30,7 @@
 #define FG_SESSION_CLASS NgxSession
 // The same proxy package with Engine=XeSS in dlssg_sm86.ini: XeSS-FG model 15 runs on the proxy's
 // own CUDA kernels, so libxess_fg.dll is not needed.
-#define FG_PROXY_DIR L"engine45_xess"
+#define FG_PROXY_DIR L"xessfg"
 
 #elif defined(FG_PLUGIN_VVFG)
 
@@ -42,7 +42,7 @@
 #define FG_SESSION_CLASS VfgSession
 // Video Effects SDK 1.3 runtime (NVCVImage.dll, NVVideoEffects.dll, nvVFXVideoFrameGeneration.dll,
 // cudart64_12.dll). The model is sm_89-only and gets unlocked in-process on Ampere.
-#define FG_PROXY_DIR L"engine_nvvfx"
+#define FG_PROXY_DIR L"vfg"
 
 #elif defined(FG_PLUGIN_VFSR4)
 
@@ -53,7 +53,7 @@
 #define FG_SESSION_NS fsr4
 #define FG_SESSION_CLASS Fsr4Session
 // The SmoothMyVideo FSR bridge, AMD's FSR runtime, and the patched vkd3d-proton it runs on.
-#define FG_PROXY_DIR L"engine_fsrfg"
+#define FG_PROXY_DIR L"fsr4"
 
 #else
 #error "select a plugin profile: FG_PLUGIN_VDLSSG, FG_PLUGIN_VXESSFG, FG_PLUGIN_VVFG or FG_PLUGIN_VFSR4"

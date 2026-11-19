@@ -1,5 +1,5 @@
 ### DLSS-G 补帧（DLSS 4.5 · sm86 解锁引擎）—— N 卡专用
-### 依赖：vs-plugins\vdlssg.dll + vs-plugins\engine45\（引擎包，没有它就只能到 4×）
+### 依赖：vs-plugins\vdlssg.dll + vs-plugins\dlss45\（引擎包，没有它就只能到 4×）
 ### 用法：vf set vapoursynth="~~/vs/MEMC_DLSSG_NV.vpy"
 ### 特点：直接在相邻两帧之间插 Multi-1 张，输出帧率 = 源帧率 × Multi
 ### 注意：真实 6× 没有真值可比，只有观感；4K 上 6× 显存放不下，跑不动
@@ -42,8 +42,8 @@ if not hasattr(core, "vdlssg"):
     for _cand in (
         os.path.join(_here, os.pardir, "vs-plugins", "vdlssg.dll"),
         os.path.join(_here, "vdlssg.dll"),
-        # 开发树：..\..\..\..\plugin\vdlssg.dll（mpv-lazy 放在仓库的 测试环境\ 下时）
-        os.path.join(_here, os.pardir, os.pardir, os.pardir, os.pardir, "plugin", "vdlssg.dll"),
+        # 开发树：..\..\..\..\vs-dlssg\bin\vdlssg.dll（mpv-lazy 放在仓库的 测试环境\ 下时）
+        os.path.join(_here, os.pardir, os.pardir, os.pardir, os.pardir, "vs-dlssg", "bin", "vdlssg.dll"),
     ):
         if os.path.isfile(_cand):
             core.std.LoadPlugin(os.path.abspath(_cand))

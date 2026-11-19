@@ -3,7 +3,7 @@
 素材：`测试数据\《崩坏：星穹铁道》星神★阿哈角色PV——「让骰子飞」 [rBgIpbQ4EOY].mkv`
 （3840×1632、5683 帧、30 fps、189.4 s，H.264 + YUV420；测色统一 `resize.Bicubic(format=vs.RGBS, matrix_in_s="709")`）
 
-插件：`plugin\vdlssg.cpp` + `dist\engine45`（DLSS 4.5 引擎包，`MaxGeneratedFrames=5`，`multi=6`）。
+插件：`vs-dlssg\src\frame_gen.cpp` + `vs-dlssg\bin\dlss45`（DLSS 4.5 引擎包，`MaxGeneratedFrames=5`，`multi=6`）。
 
 ## 1. 选段
 
@@ -75,11 +75,11 @@
 
 - `test\hsr_flow.py` 用 cv2 DIS 算反向光流（当前帧→上一帧，像素单位，半分辨率），经 16-bit PNG 载体（`work\hsr_mv\<tag>\{u,v}\NNNN.png`，`K_FLOW_SCALE=512` 即 ±256 px）喂给 `mv=`。踩的坑：Python 侧 ModifyFrame 的帧只读（`cannot set WRITEABLE flag to True`），必须走 PNG 载体；imwri 读出来是 30 fps 而 `SelectEvery` 后是 15 fps，不加 `AssumeFPS` 会报 `vdlssg: mv must be the frame size or half of it, one frame per source frame, and the same frame rate`。
 - 结果：同一对帧喂常数 `(30,0)` 与 `(-30,0)`，输出相对零 MV 只变 MAE ≈1.5e-4，且正负对称。DIS 稠密光流换来的变化是 0.000001。
-- 结论：**视频帧输入下，这个代理的 mvec 基本不参与计算**（插件侧上传路径 `plugin\ngx_session.cpp:390-408` 是好的，NGX 也确实收了）。不必为画质去算光流。
+- 结论：**视频帧输入下，这个代理的 mvec 基本不参与计算**（插件侧上传路径 `vs-dlssg\src\ngx_session.cpp` 是好的，NGX 也确实收了）。不必为画质去算光流。
 
 ## 5. 切镜阈值：默认 0.15 在这类素材上太紧
 
-`plugin\vdlssg.cpp:56-77` 的 `isSceneCut` 是「三平面、每 8 像素采样的平均绝对差 > 阈值」，numpy 复算与之逐位一致。`test\hsr_cutrate.py` 在 gap=1（真实用法）上统计帧 3400–3900：
+`vs-dlssg\src\frame_gen.cpp` 的 `isSceneCut`（原 `plugin\vdlssg.cpp:56-77`） 是「三平面、每 8 像素采样的平均绝对差 > 阈值」，numpy 复算与之逐位一致。`test\hsr_cutrate.py` 在 gap=1（真实用法）上统计帧 3400–3900：
 
 | 阈值 | 被判切镜（hold）的 pair 比例 |
 |---|---|
@@ -131,7 +131,7 @@ E:\code\VFI\.venv\Scripts\python.exe test\hsr_cutrate.py 3400 500 0.15
 
 ## 7. 顺带修掉的 bug
 
-首跑质量脚本直接报 `vdlssg: CreateCommittedResource (motion) failed (HRESULT 0x80070057)`：`plugin\ngx_session.cpp:491` 传给 `Gpu::init` 的是**未解析**的 `config.motionWidth/motionHeight`（不给 `mv` 时为 0），`plugin\d3d12_ctx.cpp:28-35` 又原样写进成员，`createResources` 就用 0 宽建纹理。改成传上一行刚算好的 `motionWidth, motionHeight` 后 4K 正常出帧。这个 bug 只在不给 `mv` 且走 4K 资源重建时触发，之前的 1080p 测试没覆盖到。
+首跑质量脚本直接报 `vdlssg: CreateCommittedResource (motion) failed (HRESULT 0x80070057)`：`vs-dlssg\src\ngx_session.cpp` 传给 `Gpu::init` 的是**未解析**的 `config.motionWidth/motionHeight`（不给 `mv` 时为 0），`vs-dlssg\src\d3d12_ctx.cpp` 又原样写进成员，`createResources` 就用 0 宽建纹理。改成传上一行刚算好的 `motionWidth, motionHeight` 后 4K 正常出帧。这个 bug 只在不给 `mv` 且走 4K 资源重建时触发，之前的 1080p 测试没覆盖到。
 
 ## 8. 结论
 

@@ -74,7 +74,7 @@ int main(int argc, char** argv) {
   config.height = h;
   config.adapterIndex = 0;
   config.engine = Engine::Vfg;
-  config.proxyDir = L"E:\\code\\dlssg-vfi\\vs-dlssg\\engine_nvvfx";
+  config.proxyDir = L"E:\\code\\dlssg-vfi\\vs-dlssg\\vfg";
   config.log = true;
 
   std::string error;

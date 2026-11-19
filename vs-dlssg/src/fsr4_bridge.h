@@ -1,5 +1,5 @@
 #pragma once
-// The FSR frame-generation bridge (engine_fsrfg\smv_fsrfg_bridge.dll) and the shared-memory contract
+// The FSR frame-generation bridge (fsr4\smv_fsrfg_bridge.dll) and the shared-memory contract
 // it exposes to a host.
 //
 // The bridge owns the FSR context and a D3D12 device of its own (vkd3d-proton's, so AMD's ML shaders

@@ -24,7 +24,7 @@ from ctypes import (POINTER, Structure, byref, c_char_p, c_double, c_int,
 import numpy as np
 
 PKG = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-BRIDGE = os.path.join(PKG, "engine_fsrfg", "smv_fsrfg_bridge.dll")
+BRIDGE = os.path.join(PKG, "fsr4", "smv_fsrfg_bridge.dll")
 CUDA = ctypes.WinDLL(r"C:\Windows\System32\nvcuda.dll")
 
 

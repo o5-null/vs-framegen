@@ -11,5 +11,5 @@ SRC = r"E:\code\dlssg-vfi\media\sintel_trailer_1080p.mp4"
 src = core.ffms2.Source(SRC)
 src = core.resize.Bicubic(src, width=1280, height=720, format=vs.RGBS, matrix_in_s="709")
 src = core.std.Trim(src, 90, 95)
-out = core.vfsr4.FrameGen(src, multi=2, proxy_dir=os.path.join(PKG, "engine_fsrfg"), log=1)
+out = core.vfsr4.FrameGen(src, multi=2, proxy_dir=os.path.join(PKG, "fsr4"), log=1)
 out.set_output()

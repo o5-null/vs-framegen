@@ -9,3 +9,6 @@
 
 保留原因：`docs\dlssg-on-3080-spike.md`、`docs\vdlssg-throughput.md` 里的早期实测与结论仍引用
 这一版的实现细节（例如为什么必须动态链接 `nvsdk_ngx_d.lib`）。除对照外不要再改这里。
+
+这一版代码里的默认引擎目录仍写作 `engine45`；现行布局已统一成 `bin\dlss45`（见
+`docs\licensing.md`），归档代码按原样保留，不要照它部署。

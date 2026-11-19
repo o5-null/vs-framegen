@@ -44,7 +44,7 @@ def main():
     clip = core.resize.Bicubic(core.ffms2.Source(SRC), format=vs.RGBS, matrix_in_s="709")
     clip = core.std.Trim(clip, START, START + COUNT - 1)
     gen = core.vdlssg.FrameGen(clip, multi=MULTI, scene_threshold=SCENE,
-                               proxy_dir=os.path.join(ROOT, "dist", "engine45"), log=0)
+                               proxy_dir=os.path.join(ROOT, ""vs-dlssg", "bin", "dlss45"), log=0)
 
     frames_dir = os.path.join(OUT, "frames")
     pair_dir = os.path.join(OUT, "pair0")

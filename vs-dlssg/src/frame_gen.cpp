@@ -10,8 +10,9 @@
 // pair runs reset -> previous -> current, so random access is safe and a distorted pair never leaks
 // into the next one.
 //
-// The NGX-backed engines (DLSS-G, XeSS-FG) need the dlssg_for_sm86 proxy beside this DLL (or in
-// proxy_dir), which is what makes the runtime accept an sm_86 card.
+// Each build reads its runtime package from one folder beside this DLL (profiles.h): bin\dlss45,
+// bin\xessfg, bin\vfg or bin\fsr4, or whatever proxy_dir names. The two NGX-backed engines get
+// their sm_86 acceptance from the dlssg_for_sm86 proxy that their package carries.
 
 #include "profiles.h"
 
@@ -296,8 +297,11 @@ std::wstring moduleDirectory() {
 }
 
 bool isProxyDir(const std::wstring& dir) {
-  // engine45/engine45_xess carry version.dll; the FSR4 package is recognised by its bridge instead.
+  // One runtime file stands for each package: version.dll for dlss45/xessfg (the sm_86 proxy),
+  // nvVFXVideoFrameGeneration.dll for vfg, the bridge for fsr4.
   return GetFileAttributesW((dir + L"\\version.dll").c_str()) != INVALID_FILE_ATTRIBUTES ||
+         GetFileAttributesW((dir + L"\\nvVFXVideoFrameGeneration.dll").c_str()) !=
+             INVALID_FILE_ATTRIBUTES ||
          GetFileAttributesW((dir + L"\\smv_fsrfg_bridge.dll").c_str()) != INVALID_FILE_ATTRIBUTES;
 }
 

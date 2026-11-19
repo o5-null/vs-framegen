@@ -16,10 +16,10 @@ import vapoursynth as vs
 core = vs.core
 
 PLAN = {
-    "dlss": ("vdlssg", 6, "engine45"),
-    "xess": ("vxessfg", 4, "engine45_xess"),
-    "vfg": ("vvfg", 4, "engine_nvvfx"),
-    "fsr4": ("vfsr4", 2, "engine_fsrfg"),
+    "dlss": ("vdlssg", 6, "dlss45"),
+    "xess": ("vxessfg", 4, "xessfg"),
+    "vfg": ("vvfg", 4, "vfg"),
+    "fsr4": ("vfsr4", 2, "fsr4"),
 }
 
 
@@ -54,7 +54,7 @@ core.std.LoadPlugin(path=os.path.join(pkg, "bin", fn + ".dll"))
 src = core.ffms2.Source(os.path.join(pkg, "..", "media", "sintel_trailer_1080p.mp4"))
 src = core.resize.Bicubic(src, format=vs.RGBS, matrix_in_s="709")
 src = core.std.Trim(src, 90, 113)
-clip = getattr(core, fn).FrameGen(src, multi=multi, proxy_dir=os.path.join(pkg, proxy), log=1 if log else 0)
+clip = getattr(core, fn).FrameGen(src, multi=multi, proxy_dir=os.path.join(pkg, "bin", proxy), log=1 if log else 0)
 
 for i in range(min(multi * 2, 8)):  # warm up: engine load / lane creation
     clip.get_frame(i)

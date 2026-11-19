@@ -16,7 +16,7 @@ src = core.resize.Bicubic(src, format=vs.RGBS, matrix_in_s="709")
 src = core.std.Trim(src, 90, 95)
 
 MULTI = 2
-out = core.vvfg.FrameGen(src, multi=MULTI, proxy_dir=os.path.join(PKG, "engine_nvvfx"), log=0)
+out = core.vvfg.FrameGen(src, multi=MULTI, proxy_dir=os.path.join(PKG, "vfg"), log=0)
 out.set_output()
 
 

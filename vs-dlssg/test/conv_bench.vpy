@@ -26,7 +26,7 @@ elif MODE == "rgbs":
 elif MODE == "rgbs_dlss":
     core.std.LoadPlugin(PKG + r"\bin\vdlssg.dll")
     rgbs = src.resize.Bicubic(format=vs.RGBS, matrix_in_s="709")
-    out = core.vdlssg.FrameGen(rgbs, multi=2, proxy_dir=PKG + r"\engine45")
+    out = core.vdlssg.FrameGen(rgbs, multi=2, proxy_dir=PKG + r"\dlss45")
 else:
     raise ValueError(MODE)
 

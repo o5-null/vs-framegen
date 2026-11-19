@@ -21,7 +21,7 @@ src = core.ffms2.Source(r"input.mkv")
 src = core.resize.Bicubic(src, format=vs.RGBS, matrix_in_s="709")   # 必须 RGBS
 
 out = core.vdlssg.FrameGen(src, multi=2, scene_threshold=0.25, gpu=0,
-                           proxy_dir=r"E:\code\dlssg-vfi\vs-dlssg\engine45")
+                           proxy_dir=r"E:\code\dlssg-vfi\vs-dlssg\dlss45")
 out = core.std.AssumeFPS(out, fpsnum=src.fps_num * 2, fpsden=src.fps_den)
 out.set_output()
 ```
@@ -29,9 +29,9 @@ out.set_output()
 其它引擎只是换命名空间与 `multi` 上限（参数完全相同）：
 
 ```python
-out = core.vxessfg.FrameGen(src, multi=4, proxy_dir=r"...\engine45_xess")  # 2×–4×
-out = core.vvfg.FrameGen(src, multi=6, proxy_dir=r"...\engine_nvvfx")      # 2×–6×
-out = core.vfsr4.FrameGen(src, multi=2, proxy_dir=r"...\engine_fsrfg")     # 固定 2×
+out = core.vxessfg.FrameGen(src, multi=4, proxy_dir=r"...\xessfg")  # 2×–4×
+out = core.vvfg.FrameGen(src, multi=6, proxy_dir=r"...\vfg")      # 2×–6×
+out = core.vfsr4.FrameGen(src, multi=2, proxy_dir=r"...\fsr4")     # 固定 2×
 ```
 
 参数、输出帧属性、部署（VapourSynth 插件目录 / mpv-lazy）与已知限制见
@@ -66,7 +66,7 @@ out = core.vfsr4.FrameGen(src, multi=2, proxy_dir=r"...\engine_fsrfg")     # 固
 | 目录 | 内容 | 进 git |
 |---|---|---|
 | `vs-dlssg\src\` | **插件源码**：`frame_gen.cpp`（滤镜 + 切镜检测）、`d3d12_ctx.cpp`、每引擎一个 `*_session.cpp`，`profiles.h` 决定一个 DLL 用哪套；`build.bat` 一次编四个 DLL | ✓ |
-| `vs-dlssg\` | 可直接分发的成品包：`bin\` 四个 DLL、`engine45\` / `engine45_xess\` / `engine_nvvfx\` / `engine_fsrfg\` 引擎包、`mpv\` 脚本、`test\`、`docs\` | 源码 ✓，`bin`/`obj`/`engine*` ✗ |
+| `vs-dlssg\` | 成品包布局：`bin\` 放四个 DLL 和四个引擎包（`dlss45` / `xessfg` / `vfg` / `fsr4`），另有 `mpv\` 脚本、`test\`、`docs\` | 源码 ✓，`bin`/`obj` ✗（第三方运行时，见 `THIRD_PARTY_NOTICES.md`） |
 | `bench\` | 八引擎基准：`src\` 脚本、`results\` 报告与图表快照、`docs\method.md` | ✓ |
 | `docs\` | 16 篇实测与设计记录（sm86 解锁、吞吐优化、画质对比、mpv 集成） | ✓ |
 | `spike\` | 不依赖 VapourSynth 的验证程序（NGX 调用序列、多帧、运动估计） | ✓ |
@@ -98,10 +98,25 @@ cmd /c E:\code\dlssg-vfi\vs-dlssg\src\build.bat
 ## 环境要求
 
 - 真实 `_nvngx.dll` 在 DriverStore（`nv_dispi.inf_amd64_*`），NGX loader 自己会找到，不要拷进项目。
-- `engine45\dlssg_sm86\logs\` 目录必须预先存在，否则零日志静默失败。
-- 运行目录必须是含 `version.dll` 的目录（代理要被显式拉起）；VFG 另需 `winmm.dll` 代理。
+- `bin\dlss45\dlssg_sm86\logs\` 目录必须预先存在，否则零日志静默失败。
+- 运行目录必须是含 `version.dll` 的目录（即 `bin\dlss45` 或 `bin\xessfg`，代理要被显式拉起）；
+  VFG 不需要额外代理，`vvfg.dll` 在进程内改 `nvVFXVideoFrameGeneration.dll` 的导入表。
 - 每个进程只能初始化一次 NGX：同进程加载两个 NGX 系插件（`vdlssg` / `vxessfg`）会让第二个失败，
   `vs-dlssg\test\all_engines.py` 因此每个引擎起一个子进程。
+
+## 第三方运行时与许可
+
+引擎包不是本仓库的内容：`.gitignore` 忽略 `/vs-dlssg/bin/`，那里放构建产物与四个包
+（`dlss45` / `xessfg` / `vfg` / `fsr4`）。NVIDIA 运行时以"并入应用的目标码"为准，代理与
+解锁属于本机自用补丁，都不适合进 git。
+
+| 想做的事 | 做法 |
+|---|---|
+| 自己跑 | 按 `docs\licensing.md` 把包放成 `bin\<引擎>\`，插件在 DLL 旁边自己找 |
+| 发插件（DLL + 源码） | 可以，随分发物附 `runtime\nvngx_dlss.license.txt` |
+| 转发引擎包 / 单独发 SDK 组件 | 不要，见 NVIDIA RTX SDKs License §3(a)(b) |
+
+逐组件清单在 `THIRD_PARTY_NOTICES.md`，部署细节与获取步骤在 `docs\licensing.md`。
 
 ## 文档索引
 
@@ -118,6 +133,7 @@ cmd /c E:\code\dlssg-vfi\vs-dlssg\src\build.bat
 | `docs\smv-dlssg-unlock.md` · `docs\smv-vfg-sm86-unlock.md` | 把 SmoothMyVideo 的 DLSS 4.5 / VFG 解锁到 RTX 20/30 |
 | `docs\hsr6x-measure.md` | 星铁 PV 4K 实测：6× 速度、GT 代理画质、切镜阈值曲线 |
 | `docs\mpv-dlssg.md` | 装进 mpv-lazy：部署清单、脚本选项、五个坑 |
+| `docs\licensing.md` · `THIRD_PARTY_NOTICES.md` | 第三方 DLL 的许可边界、实际放哪、从哪获取 |
 
 ## 致谢与商标
 

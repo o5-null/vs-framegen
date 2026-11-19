@@ -1,4 +1,4 @@
-# 6x smoke: 1080p source through engine45 (MaxGeneratedFrames=5 -> 5 interpolated frames).
+# 6x smoke: 1080p source through dlss45 (MaxGeneratedFrames=5 -> 5 interpolated frames).
 # Run:  vspipe -p test\mf6.vpy NUL
 import os
 
@@ -35,7 +35,7 @@ src = core.std.Trim(src, 0, 47)   # 48 source frames -> 288 output frames
 out = core.vdlssg.FrameGen(
     src,
     multi=6,
-    proxy_dir=os.path.join(PKG, "engine45"),
+    proxy_dir=os.path.join(PKG, "dlss45"),
     log=1,
 )
 out.set_output()

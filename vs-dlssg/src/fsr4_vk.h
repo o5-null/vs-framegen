@@ -1,7 +1,7 @@
 // fsr4_vk.h - the Vulkan window onto the FSR bridge's shared surfaces.
 //
 // Why Vulkan and not D3D12: the bundled vkd3d-proton is patched (see
-// engine_fsrfg/source/vkd3d-proton-bfdb811-smv.patch) so that CreateSharedHandle hands out the raw
+// fsr4/source/vkd3d-proton-bfdb811-smv.patch) so that CreateSharedHandle hands out the raw
 // Vulkan export of the shared resources and of the timeline semaphore instead of a D3DKMT share.
 // Measured on this machine (RTX 3080, driver 617.42): D3D12's OpenSharedHandle on those textures
 // terminates the process, CUDA's cuImportExternalMemory rejects every handle type, and vkd3d's own

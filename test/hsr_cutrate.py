@@ -72,7 +72,7 @@ def main():
         base = START + idx[0]
         gen = core.vdlssg.FrameGen(core.std.Trim(clip, base - 1, base + CHECK + 1), multi=2,
                                    scene_threshold=THRESHOLD,
-                                   proxy_dir=os.path.join(ROOT, "dist", "engine45"), log=0)
+                                   proxy_dir=os.path.join(ROOT, ""vs-dlssg", "bin", "dlss45"), log=0)
         for i in idx[:CHECK]:
             frame = gen.get_frame((START + i - (base - 1)) * 2 + 1)
             print("  plugin says frame +%d: scene_cut=%s fallback=%s"

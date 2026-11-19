@@ -1,9 +1,9 @@
-"""Engine45 冒烟测试：用引擎包自带的 dlssg2f.exe + 解锁器跑一趟 6x。
+"""dlss45 引擎包冒烟测试：用包自带的 dlssg2f.exe + sm_86 代理跑一趟 6x。
 
 合成素材：24x24 亮块每输入帧右移 10 px（中心 x = 32 + 10*index），
 正确插值时 5 张中间帧的质心应落在 10/(gen+1) 的等分点上。
 
-引擎目录默认 ../engine45，可用环境变量 DLSSG_ENGINE 或第 5 个参数覆盖。
+引擎目录默认 ../bin/dlss45，可用环境变量 DLSSG_ENGINE 或第 5 个参数覆盖。
 
 用法： python smoke.py [W H GEN N] [ENGINE_DIR]
 默认： 640 360 5 6  -> 期望 5 对 × 5 = 25 张输出
@@ -20,7 +20,7 @@ H = int(sys.argv[2]) if len(sys.argv) > 2 else 360
 GEN = int(sys.argv[3]) if len(sys.argv) > 3 else 5
 N = int(sys.argv[4]) if len(sys.argv) > 4 else 6
 ENGINE = (sys.argv[5] if len(sys.argv) > 5
-          else os.environ.get("DLSSG_ENGINE", os.path.join(here, "..", "engine45")))
+          else os.environ.get("DLSSG_ENGINE", os.path.join(here, "..", "bin", "dlss45")))
 
 
 def make_frame(index, w, h):

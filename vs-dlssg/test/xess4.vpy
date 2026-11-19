@@ -1,4 +1,4 @@
-# XeSS-FG smoke: 1080p source through engine45_xess (Engine=XeSS, MaxGeneratedFrames=3 -> 4x).
+# XeSS-FG smoke: 1080p source through xessfg (Engine=XeSS, MaxGeneratedFrames=3 -> 4x).
 # Run:  vspipe -p test\xess4.vpy NUL
 import os
 
@@ -36,7 +36,7 @@ src = core.std.Trim(src, 0, 23)   # 24 source frames -> 24*MULTI output frames
 out = core.vxessfg.FrameGen(
     src,
     multi=MULTI,
-    proxy_dir=os.path.join(PKG, "engine45_xess"),
+    proxy_dir=os.path.join(PKG, "xessfg"),
     log=1,
 )
 out.set_output()

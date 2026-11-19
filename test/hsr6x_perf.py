@@ -12,7 +12,7 @@ import os
 import vapoursynth as vs
 
 core = vs.core
-core.std.LoadPlugin(path=r"E:\code\dlssg-vfi\plugin\vdlssg.dll")
+core.std.LoadPlugin(path=r"E:\code\dlssg-vfi\vs-dlssg\bin\vdlssg.dll")
 
 MULTI = int(os.environ.get("VDLSSG_MULTI", "6"))
 START = int(os.environ.get("VDLSSG_START", "3510"))
@@ -30,5 +30,5 @@ else:
     src = core.resize.Bicubic(src, format=vs.RGBS, matrix_in_s="709")
 src = core.std.Trim(src, START, END - 1)
 out = core.vdlssg.FrameGen(src, multi=MULTI,
-                           proxy_dir=r"E:\code\dlssg-vfi\dist\engine45", log=1)
+                           proxy_dir=r"E:\code\dlssg-vfi\vs-dlssg\bin\dlss45", log=1)
 out.set_output()

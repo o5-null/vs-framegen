@@ -1,6 +1,6 @@
 // fsr4_vk_device.cpp - instance, device and the import of the bridge's handles.
 //
-// The bridge (engine_fsrfg\smv_fsrfg_bridge.dll) creates its own vkd3d-proton D3D12 device and
+// The bridge (fsr4\smv_fsrfg_bridge.dll) creates its own vkd3d-proton D3D12 device and
 // exports NT handles for three textures and a timeline semaphore. Its vkd3d build skips
 // D3DKMTShareObjects, so these are Vulkan exports: only a Vulkan device on the same GPU can import
 // them (see fsr4_vk.h). Everything here is device setup, once per process.

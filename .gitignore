@@ -27,12 +27,9 @@
 *.pdb
 *.ilk
 *.res
+# vs-dlssg\bin: 构建出的四个 DLL + 四个第三方引擎包（dlss45/xessfg/vfg/fsr4），都不进仓库
 /vs-dlssg/bin/
 /vs-dlssg/obj/
-/vs-dlssg/engine45/
-/vs-dlssg/engine45_xess/
-/vs-dlssg/engine_nvvfx/
-/vs-dlssg/engine_fsrfg/
 /archive/**/*.obj
 /archive/**/*.dll
 

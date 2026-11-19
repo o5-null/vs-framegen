@@ -27,16 +27,16 @@ DLSS-G 本身只占 **3.2 ms/生成帧**。1080p 为 **140 fps 输出**。
 
 ## 四处改动
 
-1. **CPU 转换多线程**（`plugin\ngx_session.cpp`）：`float32 → half`（上传）与
+1. **CPU 转换多线程**（`vs-dlssg\src\ngx_session.cpp`）：`float32 → half`（上传）与
    `half → float32`（回读）原本是标量单线程，有效带宽约 1 GB/s，2160p 一帧要搬约
    400 MB。新增 `parallelRows(height, fn)`，按行分带到 `hardware_concurrency()`（上限 16）。
    收益 12.98 s → 5.85 s。
-2. **跳过常量输入拷贝**（`plugin\d3d12_ctx.cpp::recordPreEvaluate`）：深度恒 0.5、
+2. **跳过常量输入拷贝**（`vs-dlssg\src\d3d12_ctx.cpp::recordPreEvaluate`）：深度恒 0.5、
    运动矢量恒 0，这两个纹理只在首趟 `fillConstantInputs` 之后不再变化，所以
    `copyUploadToTexture(depth/motion)` 只在首趟执行（`constantInputsCopied_`），
    2160p 每帧省下 66 MB 的 `CopyTextureRegion`。收益 5.85 s → 2.84 s。
 3. `build.bat` 加 `/arch:AVX2`（F16C 内建在 MSVC 上不可用，见下）。
-4. **复用上一对留下的颜色纹理**（`plugin\ngx_session.cpp::generate` + `d3d12_ctx.cpp`
+4. **复用上一对留下的颜色纹理**（`vs-dlssg\src\ngx_session.cpp::generate` + `d3d12_ctx.cpp`
    的 `recordPreEvaluate(bool copyColor)`）：第二趟结束时 `color_` 里正好是下一对的
    `prev`（源帧 k+1），所以顺序取帧时第一趟完全不用上传，2160p 每生成帧再省
    74 MB。靠 `lastPairIndex`/`lastPairValid` 判定，乱序取帧自动退回上传，仍然正确。
