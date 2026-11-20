@@ -1,0 +1,72 @@
+[
+ {
+  "model": "rife_v4.14.onnx",
+  "ms_out": 3.74,
+  "psnr": 54.13,
+  "psnr_min": 49.48,
+  "ok": true
+ },
+ {
+  "model": "rife_v4.15_lite.onnx",
+  "ms_out": 3.13,
+  "psnr": 54.69,
+  "psnr_min": 49.17,
+  "ok": true
+ },
+ {
+  "model": "rife_v4.15_lite_ensemble.onnx",
+  "ms_out": 4.57,
+  "psnr": 54.89,
+  "psnr_min": 49.29,
+  "ok": true
+ },
+ {
+  "model": "rife_v4.16_lite.onnx",
+  "ms_out": 3.08,
+  "psnr": 54.74,
+  "psnr_min": 49.21,
+  "ok": true
+ },
+ {
+  "model": "rife_v4.16_lite_ensemble.onnx",
+  "ms_out": 4.61,
+  "psnr": 54.94,
+  "psnr_min": 49.45,
+  "ok": true
+ },
+ {
+  "model": "rife_v4.17_ensemble.onnx",
+  "ms_out": 5.92,
+  "psnr": 55.24,
+  "psnr_min": 49.65,
+  "ok": true
+ },
+ {
+  "model": "rife_v4.22_lite.onnx",
+  "ms_out": 3.07,
+  "psnr": 54.25,
+  "psnr_min": 47.86,
+  "ok": true
+ },
+ {
+  "model": "rife_v4.24_ensemble.onnx",
+  "ms_out": 5.76,
+  "psnr": 54.68,
+  "psnr_min": 49.93,
+  "ok": true
+ },
+ {
+  "model": "rife_v4.25.onnx",
+  "ms_out": 3.08,
+  "psnr": 53.71,
+  "psnr_min": 49.12,
+  "ok": true
+ },
+ {
+  "model": "rife_v4.26.onnx",
+  "ms_out": 3.04,
+  "psnr": 53.46,
+  "psnr_min": 48.67,
+  "ok": true
+ }
+]

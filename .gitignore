@@ -12,6 +12,8 @@
 # RIFE / ONNX 模型与 RTX runtime 实验目录
 /rife/
 /rife4k/
+# vsrife 的 ONNX 模型（27 MB，按约定与上面的 rife\ 一致不进仓库）
+/vsrife/models/
 # VS Code 本地历史
 /.history/
 .history/
