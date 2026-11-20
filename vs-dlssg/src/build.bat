@@ -45,7 +45,7 @@ if not "%EXTRA_INC%"=="" set INC_ARG=/I"%EXTRA_INC%"
 if not "%EXTRA_LIBDIR%"=="" set LIB_ARG=/LIBPATH:"%EXTRA_LIBDIR%" vulkan-1.lib
 echo [build] %NAME%
 if not exist "..\obj\%NAME%" mkdir "..\obj\%NAME%"
-cl /nologo /std:c++17 /utf-8 /EHsc /O2 /MD /arch:AVX2 /W3 /DNDEBUG /D%PROFILE% /I"%NGX_SDK%\include" /I"%VS_INCLUDE%" %INC_ARG% ^
+cl /nologo /std:c++17 /utf-8 /EHsc /O2 /MD /arch:AVX2 /W3 /DNDEBUG /D%PROFILE% /DVS_USE_LATEST_API /I"%NGX_SDK%\include" /I"%VS_INCLUDE%" %INC_ARG% ^
    /Fo:..\obj\%NAME%\ /Fe:..\bin\%NAME%.dll ^
    %SOURCES% ^
    /link /DLL /SUBSYSTEM:WINDOWS ^

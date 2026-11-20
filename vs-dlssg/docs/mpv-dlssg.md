@@ -31,8 +31,8 @@
 ## 3. 与 `MEMC_RIFE_NV.vpy` 的差异
 
 - 不依赖 `k7sfunc`：没有现成的 DLSSG 封装，直接 `core.vdlssg.FrameGen`，所以也不需要 `vsmlrt` / TensorRT。
-- 像素格式：插件只吃 `RGBS`（float32 三平面），脚本用 `Bilinear` + `matrix_in_s="709"` 转进去，出来再用同一矩阵转回源的 `fmt_in`。之所以要转回去，是因为 mpv 的 `vf_vapoursynth` 只接受有限的一组 8/10bit YUV 格式（RGBS 不在其中）。
-- 帧率：插件保持输入的 `fpsNum/fpsDen` 却把帧数变成 `Multi` 倍，**必须自己 `AssumeFPS(fps_in * Multi)`**，否则 mpv 会按原帧率播放成慢动作。脚本用 `fpsnum=int(round(fps_in*Multi*1e6)), fpsden=1000000`，与 k7sfunc 的做法一致。
+- 像素格式：**YUV 直通**——mpv 送来的 8/10bit 平面 YUV 直接喂给插件，插件按帧属性里的 `_Matrix`/`_Range`/`_ChromaLocation` 自行转 RGB 交给引擎，输出再写回同一格式。省掉「转到 RGBS、再转回源格式」两趟全帧复制（1080p `Multi=3` 实测每源帧 1–3 ms）。mpv 的 `vf_vapoursynth` 只接受 8/10bit 平面 YUV，`RGBS` 不在其中，所以直通也是唯一能不改像素格式的选择。
+- 帧率：插件自己把 `fpsNum/fpsDen` 乘上 `Multi`（已约分）并逐帧写 `_Duration`/`_AbsoluteTime`，脚本不再 `AssumeFPS`；只有源没有帧率时才兜底一次。
 - 没用 `FPS_CTRL`：那是给「源帧率过高时先降帧」的，补帧倍数是整数倍，直接 `container_fps * Multi` 即可。
 
 ## 4. 踩过的坑

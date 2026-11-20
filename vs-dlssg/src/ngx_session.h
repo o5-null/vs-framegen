@@ -19,6 +19,7 @@ namespace vdlssg {
 // The session interface lives in fg_types.h; re-export it so this header stays the one place an
 // NGX-backed plugin includes.
 using fg::Config;
+using fg::ColorFormat;
 using fg::Engine;
 using fg::GenerateResult;
 using fg::PlaneSink;
@@ -52,8 +53,8 @@ class NgxSession {
   // pointer must stay valid for the duration of this call only.
   bool generate(const PlaneView& prev, const PlaneView& cur, const PlaneView* prevMv,
                 const PlaneView* curMv, uint64_t streamId, int64_t pairIndex,
-                uint32_t multiFrameCount, uint32_t multiFrameIndex, const PlaneSink& out,
-                GenerateResult& result, std::string& error);
+                uint32_t multiFrameCount, uint32_t multiFrameIndex, const ColorFormat& format,
+                const PlaneSink& out, GenerateResult& result, std::string& error);
 
   // A fresh identifier for one filter instance's frame stream.
   uint64_t newStream();

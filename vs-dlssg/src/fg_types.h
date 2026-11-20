@@ -49,6 +49,39 @@ inline int engineMaxMulti(Engine engine) {
   return 2;
 }
 
+// What the filter reads from its caller and writes back: planar float32 RGB (VapourSynth RGBS),
+// or planar YUV in whatever bit depth and subsampling the source has. Keeping the caller's YUV
+// avoids the two extra full-frame conversions a RGBS round trip costs (roughly 12 ms per source
+// frame at 1080p with multi=3).
+enum class ColorSpace { Rgb, Yuv };
+
+struct ColorFormat {
+  ColorSpace space = ColorSpace::Rgb;
+  int bits = 32;      // sample bits: 32 for RGBS float, 8/10/12/16 for planar YUV
+  int subW = 1;       // chroma subsampling: 1 = 4:4:4, 2 = 4:2:2 / 4:2:0
+  int subH = 1;       // 1 = 4:4:4 / 4:2:2, 2 = 4:2:0
+  bool fullRange = false;
+  int matrix = 1;     // VapourSynth _Matrix: 1 = BT.709, 4/5/6 = BT.601, 9 = BT.2020 non-constant
+  int chromaLocation = 0;  // VapourSynth _ChromaLocation: 0 = left, 1 = center, 2 = top-left, 3 = top
+  int bytesPerSample() const {
+    if (space == ColorSpace::Rgb) return 4;
+    return bits > 8 ? 2 : 1;  // VapourSynth stores anything wider than 8 bits in uint16
+  }
+  bool isYuv() const { return space == ColorSpace::Yuv; }
+  // Layout only: what the session has to agree on for the whole process (plane count, sample size,
+  // subsampling). The colour encoding (range, matrix, chroma siting) travels with each call,
+  // because it is a frame property and may differ between clips.
+  bool sameLayout(const ColorFormat& other) const {
+    return space == other.space && bits == other.bits && subW == other.subW && subH == other.subH;
+  }
+  // Two formats are interchangeable only if every field matches: the conversion maths and the
+  // session's cached plan both depend on all of them.
+  bool matches(const ColorFormat& other) const {
+    return sameLayout(other) && fullRange == other.fullRange && matrix == other.matrix &&
+           chromaLocation == other.chromaLocation;
+  }
+};
+
 // Planar float32 RGB input (VapourSynth RGBS), one pointer and stride per plane.
 struct PlaneView {
   const uint8_t* data[3] = {nullptr, nullptr, nullptr};
@@ -69,6 +102,8 @@ struct GenerateResult {
 struct Config {
   uint32_t width = 0;
   uint32_t height = 0;
+  // Pixel layout of the frames handed in and expected back. Everything except RGBS is planar YUV.
+  ColorFormat format;
   // Motion texture size: 0,0 means one vector per pixel (the frame size). A caller that supplies a
   // coarser field (Encore's estimator emits one vector per 2x2 block) sets half of that here.
   uint32_t motionWidth = 0;

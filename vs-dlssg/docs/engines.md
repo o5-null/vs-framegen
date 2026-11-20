@@ -131,6 +131,6 @@ UseHudless=Auto
 
 1. 四个插件各自单进程单尺寸：换分辨率要重启进程。
 2. 都只接受 `RGBS`（`cfRGB` + `stFloat` + 32 bit + 3 平面）。
-3. 插件保持输入 fps、帧数乘 `multi`，非 mpv 场景要自己 `AssumeFPS`。
+3. 插件把输出帧率乘上 `multi` 并逐帧写 `_Duration`/`_AbsoluteTime`，不要再自己 `AssumeFPS`。
 4. `camera` 只对 DLSS 有效。
 5. `vdlssg` 与 `vxessfg` 不能同进程共存：NGX 的核（`nvngx.dll`）和 dlssg snippet 都按名字加载、每进程只能 init 一次，先 init 的代理凭自己的 `dlssg_sm86.ini` 固定 `Engine=DLSS` 还是 `XeSS`，后者的 `EvaluateDlssg`/`CreateDlssgFeature` 会返回 `0xbad00004`/`0xbad00001`。插件现在用进程级命名互斥量提前拦截，报 `another NGX engine plugin (vdlssg) already initialized NGX in this process; ... load only one of vdlssg / vxessfg per script`。`vvfg`、`vfsr4` 不受影响（前者只用 CUDA driver API，后者只用 vkd3d + Vulkan）。对比四个引擎跑 `test\all_engines.py`，它按引擎各起一个子进程。

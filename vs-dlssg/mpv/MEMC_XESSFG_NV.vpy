@@ -64,22 +64,23 @@ if Pre_H and clip.height > Pre_H:
     clip = core.resize.Bicubic(clip, width=_w, height=Pre_H)
 
 yuv_in = clip.format.color_family != vs.RGB
-fmt_in = clip.format.id
 
-# 插件只吃 RGBS（float32 三平面）
-src = core.resize.Bilinear(clip, format=vs.RGBS, matrix_in_s="709" if yuv_in else None)
+# 插件直接吃平面 YUV（矩阵/范围/色度位置从帧属性读，mpv 的 _ColorSpace/_ColorRange 正好对得上），
+# 不再中转 RGBS，省掉进出两趟全分辨率转换
+if yuv_in:
+    src = clip
+elif clip.format.sample_type == vs.FLOAT and clip.format.bits_per_sample == 32:
+    src = clip
+else:
+    src = core.resize.Bilinear(clip, format=vs.RGBS)
 fg = core.vxessfg.FrameGen(src, multi=Multi, scene_threshold=Scene, log=1 if Log else 0,
                            **({} if Gpu is None else {"gpu": Gpu}))
 
-# 回到源像素格式；mpv 的 vf=vapoursynth 只接受有限的 8/10bit YUV 格式
-out = core.resize.Bilinear(
-    fg, format=fmt_in,
-    matrix_s="709" if yuv_in else None,
-    range_in_s="full",
-    range_s="limited" if yuv_in else "full",
-)
+# 输出格式与输入相同：YUV 源原样交给 mpv；只有 RGB 源才转回 mpv 能收的 10bit YUV
+out = fg if yuv_in else core.resize.Bilinear(fg, format=vs.YUV420P10, matrix_s="709")
 
-# 插件保持输入的 fps，帧数却变成 Multi 倍，必须改回真实输出帧率
-out = core.std.AssumeFPS(out, fpsnum=int(round(fps_in * Multi * 1e6)), fpsden=1000000)
+# 插件已把输出帧率乘以 Multi，并逐帧写好 _Duration/_AbsoluteTime；只有源没有帧率时才兜底
+if not out.fps_num or not out.fps_den:
+    out = core.std.AssumeFPS(out, fpsnum=int(round(fps_in * Multi * 1e6)), fpsden=1000000)
 
 out.set_output()

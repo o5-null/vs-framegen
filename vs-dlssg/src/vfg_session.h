@@ -35,7 +35,8 @@ class VfgSession {
   // surfaces. prevMv / curMv are accepted for interface parity and ignored: the model estimates its own flow.
   bool generate(const PlaneView& prev, const PlaneView& cur, const PlaneView* prevMv, const PlaneView* curMv,
                 uint64_t streamId, int64_t pairIndex, uint32_t multiFrameCount, uint32_t multiFrameIndex,
-                const PlaneSink& out, GenerateResult& result, std::string& error);
+                const fg::ColorFormat& format, const PlaneSink& out, GenerateResult& result,
+                std::string& error);
 
   uint64_t newStream();
 

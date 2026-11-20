@@ -61,7 +61,8 @@ struct Fsr4Session::Impl {
 
   bool init(const fg::Config& cfg, std::string& error);
   void shutdown();
-  bool feed(const fg::PlaneView& color, const fg::PlaneView* motion, int reset, std::string& error);
+  bool feed(const fg::PlaneView& color, const fg::ColorFormat& format, const fg::PlaneView* motion,
+            int reset, std::string& error);
   void applyCamera(const fg::PlaneView* motion);
 };
 
@@ -177,13 +178,13 @@ void Fsr4Session::Impl::applyCamera(const fg::PlaneView* motion) {
   }
 }
 
-bool Fsr4Session::Impl::feed(const fg::PlaneView& color, const fg::PlaneView* motion, int reset,
-                             std::string& error) {
+bool Fsr4Session::Impl::feed(const fg::PlaneView& color, const fg::ColorFormat& format,
+                             const fg::PlaneView* motion, int reset, std::string& error) {
   const uint32_t mvW = config.motionWidth ? config.motionWidth : config.width;
   const uint32_t mvH = config.motionHeight ? config.motionHeight : config.height;
   const double t0 = verbose ? nowMs() : 0.0;
   // A missing field is a zero field, which is what the DLSS and XeSS backends do with a null clip.
-  if (!gpu.uploadColor(color, error)) return false;
+  if (!gpu.uploadColor(color, format, error)) return false;
   if (!gpu.uploadMotion(motion, mvW, mvH, error)) return false;
   const double t1 = verbose ? nowMs() : 0.0;
 
@@ -254,8 +255,9 @@ void Fsr4Session::release(Fsr4Session* session) {
 bool Fsr4Session::generate(const fg::PlaneView& prev, const fg::PlaneView& cur,
                            const fg::PlaneView* prevMv, const fg::PlaneView* curMv,
                            uint64_t streamId, int64_t pairIndex, uint32_t multiFrameCount,
-                           uint32_t multiFrameIndex, const fg::PlaneSink& out,
-                           fg::GenerateResult& result, std::string& error) {
+                           uint32_t multiFrameIndex, const fg::ColorFormat& format,
+                           const fg::PlaneSink& out, fg::GenerateResult& result,
+                           std::string& error) {
   Impl& s = *impl_;
   std::lock_guard<std::mutex> guard(s.lock);
   const double t0 = nowMs();
@@ -273,7 +275,7 @@ bool Fsr4Session::generate(const fg::PlaneView& prev, const fg::PlaneView& cur,
 
   if (repeat) {
     // The caller asked for a frame this pair already produced; the output texture still holds it.
-    if (!s.gpu.readback(out, error)) return false;
+    if (!s.gpu.readback(out, format, error)) return false;
     result.evaluateMs = nowMs() - t0;
     return true;
   }
@@ -282,13 +284,13 @@ bool Fsr4Session::generate(const fg::PlaneView& prev, const fg::PlaneView& cur,
     // A new stream, a skipped pair or a scene change: the bridge knows nothing about this pair's
     // first frame, so it starts a sequence with reset=1 (which also resets the bridge's camera).
     s.stage = 0;
-    if (!s.feed(prev, prevMv, 1, error)) return false;
+    if (!s.feed(prev, format, prevMv, 1, error)) return false;
     s.stage = 1;
   }
   // else: the previous generate fed exactly this pair's first frame as its last frame, so feeding it
   // again would advance FSR's frame counter with a duplicate. Go straight to the second frame.
 
-  if (!s.feed(cur, curMv, 0, error)) {
+  if (!s.feed(cur, format, curMv, 0, error)) {
     s.stage = 0;  // the bridge may be half way through a sequence; start over next time
     return false;
   }
@@ -297,7 +299,7 @@ bool Fsr4Session::generate(const fg::PlaneView& prev, const fg::PlaneView& cur,
   s.stage = 2;
 
   const double r0 = s.verbose ? nowMs() : 0.0;
-  if (!s.gpu.readback(out, error)) {
+  if (!s.gpu.readback(out, format, error)) {
     s.stage = 0;
     return false;
   }

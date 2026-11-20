@@ -7,6 +7,14 @@
 #include "ngx_session.h"
 
 #include "d3d12_ctx.h"
+#include "yuv.h"
+
+using fg::YuvCoefficients;
+using fg::YuvQuant;
+using fg::YuvRowWriter;
+using fg::yuvCoefficients;
+using fg::yuvQuant;
+using fg::yuvRowToRgb;
 
 #include <Windows.h>
 #include <d3d12.h>
@@ -603,20 +611,39 @@ void parallelRows(uint32_t height, Fn fn) {
   for (auto& worker : pool) worker.join();
 }
 
-// RGBS planes -> the colour upload buffer (A = 1). Rows go through the copy pitch, which is
-// padded. The texture's format decides the packing: RGBA half for DLSS-G, packed 10:10:10:2 for
-// XeSS-FG.
+// RGBS planes, or planar YUV converted on the way, -> the colour upload buffer (A = 1). Rows go
+// through the copy pitch, which is padded. The texture's format decides the packing: RGBA half for
+// DLSS-G, packed 10:10:10:2 for XeSS-FG.
 bool uploadColor(Gpu& gpu, const PlaneView& frame, uint32_t width, uint32_t height,
-                 std::string& error) {
+                 const ColorFormat& format, std::string& error) {
   uint8_t* base = gpu.mapColor(error);
   if (!base) return false;
   const size_t pitch = size_t(gpu.colorRowPitch());
   const bool tenBit = gpu.colorFormat() == DXGI_FORMAT_R10G10B10A2_UNORM;
+  const bool yuv = format.isYuv();
+  const YuvQuant quant = yuvQuant(format.bits, format.fullRange);
+  const YuvCoefficients co = yuvCoefficients(format.matrix);
   parallelRows(height, [&](uint32_t y0, uint32_t y1) {
+    // A YUV source is converted a row at a time into these, so the packing loop below reads the
+    // same layout either way.
+    std::vector<float> rgb(yuv ? size_t(width) * 3 : 0);
+    float* rowR = yuv ? rgb.data() : nullptr;
+    float* rowG = yuv ? rgb.data() + width : nullptr;
+    float* rowB = yuv ? rgb.data() + size_t(width) * 2 : nullptr;
     for (uint32_t y = y0; y < y1; ++y) {
-      const float* r = reinterpret_cast<const float*>(frame.data[0] + y * frame.stride[0]);
-      const float* g = reinterpret_cast<const float*>(frame.data[1] + y * frame.stride[1]);
-      const float* b = reinterpret_cast<const float*>(frame.data[2] + y * frame.stride[2]);
+      const float* r;
+      const float* g;
+      const float* b;
+      if (yuv) {
+        yuvRowToRgb(frame, format, int(width), int(height), int(y), quant, co, rowR, rowG, rowB);
+        r = rowR;
+        g = rowG;
+        b = rowB;
+      } else {
+        r = reinterpret_cast<const float*>(frame.data[0] + y * frame.stride[0]);
+        g = reinterpret_cast<const float*>(frame.data[1] + y * frame.stride[1]);
+        b = reinterpret_cast<const float*>(frame.data[2] + y * frame.stride[2]);
+      }
       if (tenBit) {
         auto* dst = reinterpret_cast<uint32_t*>(base + size_t(y) * pitch);
         for (uint32_t x = 0; x < width; ++x) dst[x] = packRgb10(r[x], g[x], b[x]);
@@ -635,8 +662,73 @@ bool uploadColor(Gpu& gpu, const PlaneView& frame, uint32_t width, uint32_t heig
   return true;
 }
 
-// Motion field in the runtime's convention: R16G16_FLOAT per texel, units of frame pixels
-// (mvecScale is 1/w,1/h regardless of how coarse the texture is), pointing from this frame back
+// The colour texture the engine wrote -> the caller's planes. RGBS comes back unchanged; a YUV
+// caller gets planar YUV, with chroma as a box average of the subW x subH block (what an encoder
+// does, and what keeps a flat area neutral).
+bool readbackColor(Gpu& gpu, const PlaneSink& out, uint32_t width, uint32_t height,
+                   const ColorFormat& format, std::string& error) {
+  const uint8_t* raw = gpu.mapReadback(error);
+  if (!raw) return false;
+  const size_t pitch = size_t(gpu.colorRowPitch());
+  const bool tenBit = gpu.colorFormat() == DXGI_FORMAT_R10G10B10A2_UNORM;
+  const auto unpackRow = [&](int y, float* r, float* g, float* b) {
+    if (tenBit) {
+      // The runtime wrote R10G10B10A2: unpack the three colour channels, drop alpha.
+      const auto* src = reinterpret_cast<const uint32_t*>(raw + size_t(y) * pitch);
+      for (uint32_t x = 0; x < width; ++x) {
+        const uint32_t v = src[x];
+        r[x] = from10(v);
+        g[x] = from10(v >> 10);
+        b[x] = from10(v >> 20);
+      }
+      return;
+    }
+    const auto* src = reinterpret_cast<const uint16_t*>(raw + size_t(y) * pitch);
+    for (uint32_t x = 0; x < width; ++x) {
+      r[x] = halfToFloatFast(src[size_t(x) * 4 + 0]);
+      g[x] = halfToFloatFast(src[size_t(x) * 4 + 1]);
+      b[x] = halfToFloatFast(src[size_t(x) * 4 + 2]);
+    }
+  };
+
+  if (!format.isYuv()) {
+    parallelRows(height, [&](uint32_t y0, uint32_t y1) {
+      for (uint32_t y = y0; y < y1; ++y) {
+        unpackRow(int(y), reinterpret_cast<float*>(out.data[0] + y * out.stride[0]),
+                  reinterpret_cast<float*>(out.data[1] + y * out.stride[1]),
+                  reinterpret_cast<float*>(out.data[2] + y * out.stride[2]));
+      }
+    });
+    gpu.unmapReadback();
+    return true;
+  }
+
+  YuvRowWriter writer;
+  writer.bind(out, format, int(width), int(height));
+  const int subH = format.subH;
+  parallelRows(uint32_t(writer.chromaRows()), [&](uint32_t c0, uint32_t c1) {
+    std::vector<float> rgb(size_t(width) * 3 * size_t(subH));
+    const float* rows[6] = {};
+    for (uint32_t cy = c0; cy < c1; ++cy) {
+      int count = 0;
+      for (int dy = 0; dy < subH; ++dy) {
+        const int y = int(cy) * subH + dy;
+        if (y >= int(height)) break;
+        float* r = rgb.data() + size_t(count) * 3 * size_t(width);
+        unpackRow(y, r, r + width, r + size_t(width) * 2);
+        rows[count * 3 + 0] = r;
+        rows[count * 3 + 1] = r + width;
+        rows[count * 3 + 2] = r + size_t(width) * 2;
+        ++count;
+      }
+      writer.writeBlock(int(cy), rows, count);
+    }
+  });
+  gpu.unmapReadback();
+  return true;
+}
+
+// Motion field in the runtime's convention: R16G16_FLOAT per texel, units of frame pixels// (mvecScale is 1/w,1/h regardless of how coarse the texture is), pointing from this frame back
 // to the previous one. The texture covers gpu.motionWidth() x gpu.motionHeight(), which equals the
 // frame size for a per-pixel field and half of it for a per-2x2-block field.
 bool uploadMotion(Gpu& gpu, const PlaneView& mv, std::string& error) {
@@ -694,6 +786,10 @@ struct NgxSession::Impl {
   NVSDK_NGX_Handle* feature = nullptr;
   uint32_t width = 0;
   uint32_t height = 0;
+  // Pixel layout the caller hands in and expects back (RGBS or planar YUV). Only the layout part is
+  // fixed per session; the colour encoding arrives with each generate() call, read from the source
+  // frame's own properties.
+  ColorFormat format;
   uint32_t motionWidth = 0;
   uint32_t motionHeight = 0;
   unsigned long long frameId = 0;
@@ -750,6 +846,7 @@ bool claimNgxSlot(Engine engine, HANDLE* slot, std::string& error) {
 bool NgxSession::Impl::init(const Config& config, std::string& error) {
   width = config.width;
   height = config.height;
+  format = config.format;
   // The session owns one motion texture size for its lifetime, so two clips that disagree on it
   // cannot share the singleton.
   motionWidth = config.motionWidth ? config.motionWidth : config.width;
@@ -912,8 +1009,9 @@ NgxSession* NgxSession::acquire(const Config& config, std::string& error) {
     const uint32_t mvH = config.motionHeight ? config.motionHeight : config.height;
     if (g_session->impl_->width != config.width || g_session->impl_->height != config.height ||
         g_session->impl_->motionWidth != mvW || g_session->impl_->motionHeight != mvH ||
-        g_session->impl_->engine != config.engine) {
-      error = "vdlssg: only one frame size and engine per process is supported "
+        g_session->impl_->engine != config.engine ||
+        !g_session->impl_->format.sameLayout(config.format)) {
+      error = "vdlssg: only one frame size, pixel layout and engine per process is supported "
               "(restart with a single size)";
       return nullptr;
     }
@@ -943,8 +1041,9 @@ uint64_t NgxSession::newStream() {
 
 bool NgxSession::generate(const PlaneView& prev, const PlaneView& cur, const PlaneView* prevMv,
                           const PlaneView* curMv, uint64_t streamId, int64_t pairIndex,
-                          uint32_t multiFrameCount, uint32_t multiFrameIndex, const PlaneSink& out,
-                          GenerateResult& result, std::string& error) {
+                          uint32_t multiFrameCount, uint32_t multiFrameIndex,
+                          const ColorFormat& format, const PlaneSink& out, GenerateResult& result,
+                          std::string& error) {
   std::lock_guard<std::mutex> guard(g_lock);
   Impl& s = *impl_;
   if (!s.feature) {
@@ -994,7 +1093,7 @@ bool NgxSession::generate(const PlaneView& prev, const PlaneView& cur, const Pla
   if (!samePair) {
     // Pass 1: previous frame. It resets the temporal history; its output is thrown away.
     if (!nextPair) {
-      if (!uploadColor(*s.gpu, prev, s.width, s.height, error)) return false;
+      if (!uploadColor(*s.gpu, prev, s.width, s.height, format, error)) return false;
       // Same reuse rule as the colour texture: the previous pair's pass 2 left its current frame's
       // motion field in the texture, and that frame is this pair's previous frame.
       if (prevMv && !uploadMotion(*s.gpu, *prevMv, error)) return false;
@@ -1004,7 +1103,7 @@ bool NgxSession::generate(const PlaneView& prev, const PlaneView& cur, const Pla
     }
     spent += s.gpu->timings().evaluateMs;
 
-    if (!uploadColor(*s.gpu, cur, s.width, s.height, error)) return false;
+    if (!uploadColor(*s.gpu, cur, s.width, s.height, format, error)) return false;
     s.pairSeeded = false;
   }
 
@@ -1031,36 +1130,7 @@ bool NgxSession::generate(const PlaneView& prev, const PlaneView& cur, const Pla
   result.suppressed = suppressed && multiFrameCount <= 1;
   if (result.suppressed) return true;
 
-  const uint8_t* raw = s.gpu->mapReadback(error);
-  if (!raw) return false;
-  const size_t pitch = size_t(s.gpu->colorRowPitch());
-  const bool tenBit = s.gpu->colorFormat() == DXGI_FORMAT_R10G10B10A2_UNORM;
-  parallelRows(s.height, [&](uint32_t y0, uint32_t y1) {
-    for (uint32_t y = y0; y < y1; ++y) {
-      float* r = reinterpret_cast<float*>(out.data[0] + y * out.stride[0]);
-      float* g = reinterpret_cast<float*>(out.data[1] + y * out.stride[1]);
-      float* b = reinterpret_cast<float*>(out.data[2] + y * out.stride[2]);
-      if (tenBit) {
-        // The runtime wrote R10G10B10A2: unpack the three colour channels, drop alpha.
-        const auto* src = reinterpret_cast<const uint32_t*>(raw + size_t(y) * pitch);
-        for (uint32_t x = 0; x < s.width; ++x) {
-          const uint32_t v = src[x];
-          r[x] = from10(v);
-          g[x] = from10(v >> 10);
-          b[x] = from10(v >> 20);
-        }
-        continue;
-      }
-      const auto* src = reinterpret_cast<const uint16_t*>(raw + size_t(y) * pitch);
-      for (uint32_t x = 0; x < s.width; ++x) {
-        r[x] = halfToFloatFast(src[size_t(x) * 4 + 0]);
-        g[x] = halfToFloatFast(src[size_t(x) * 4 + 1]);
-        b[x] = halfToFloatFast(src[size_t(x) * 4 + 2]);
-      }
-    }
-  });
-  s.gpu->unmapReadback();
-  return true;
+  return readbackColor(*s.gpu, out, s.width, s.height, format, error);
 }
 
 }  // namespace vdlssg

@@ -11,6 +11,7 @@
 // format; 10 bits keeps the float input from quantising to 8).
 
 #include "vfg_session.h"
+#include "yuv.h"
 
 #include <windows.h>
 #include <dxgi.h>
@@ -577,8 +578,9 @@ struct VfgSession::Impl {
   }
 
   // Pack one RGBS frame into R10G10B10A2 and send it to a device surface. The packed bytes are kept by frame
-  // number, so the other lanes that need the same frame skip the packing pass.
-  bool upload(Lane& lane, int slot, int64_t index, const PlaneView& frame) {
+  // number, so the other lanes that need the same frame skip the packing pass. A planar YUV frame is
+  // converted to RGB row by row on the way, which is where the separate RGBS round trip used to be.
+  bool upload(Lane& lane, int slot, int64_t index, const PlaneView& frame, const fg::ColorFormat& format) {
     const unsigned w = config.width, h = config.height;
     const size_t pixels = static_cast<size_t>(w) * h;
     unsigned* host = nullptr;
@@ -590,6 +592,9 @@ struct VfgSession::Impl {
       packedNext ^= 1;
       host = packed + static_cast<size_t>(i) * pixels;
       packedIndex[i] = index;
+      const bool yuv = format.isYuv();
+      const fg::YuvQuant yq = fg::yuvQuant(format.bits, format.fullRange);
+      const fg::YuvCoefficients co = fg::yuvCoefficients(format.matrix);
       parallelRows(h, [&](uint32_t y0, uint32_t y1) {
         const auto quant = [](float v, unsigned max) {
           if (!(v > 0.0f))
@@ -598,10 +603,24 @@ struct VfgSession::Impl {
             return max;
           return static_cast<unsigned>(v * static_cast<float>(max) + 0.5f);
         };
+        std::vector<float> rgb(yuv ? static_cast<size_t>(w) * 3 : 0);
+        float* ycR = yuv ? rgb.data() : nullptr;
+        float* ycG = yuv ? rgb.data() + w : nullptr;
+        float* ycB = yuv ? rgb.data() + static_cast<size_t>(w) * 2 : nullptr;
         for (unsigned y = y0; y < y1; y++) {
-          const float* r = reinterpret_cast<const float*>(frame.data[0] + static_cast<ptrdiff_t>(y) * frame.stride[0]);
-          const float* g = reinterpret_cast<const float*>(frame.data[1] + static_cast<ptrdiff_t>(y) * frame.stride[1]);
-          const float* b = reinterpret_cast<const float*>(frame.data[2] + static_cast<ptrdiff_t>(y) * frame.stride[2]);
+          const float* r;
+          const float* g;
+          const float* b;
+          if (yuv) {
+            fg::yuvRowToRgb(frame, format, int(w), int(h), int(y), yq, co, ycR, ycG, ycB);
+            r = ycR;
+            g = ycG;
+            b = ycB;
+          } else {
+            r = reinterpret_cast<const float*>(frame.data[0] + static_cast<ptrdiff_t>(y) * frame.stride[0]);
+            g = reinterpret_cast<const float*>(frame.data[1] + static_cast<ptrdiff_t>(y) * frame.stride[1]);
+            b = reinterpret_cast<const float*>(frame.data[2] + static_cast<ptrdiff_t>(y) * frame.stride[2]);
+          }
           unsigned* row = host + static_cast<size_t>(y) * w;
           for (unsigned x = 0; x < w; x++) {
             // The model reads the words as R, G, B, A bytes.
@@ -618,7 +637,8 @@ struct VfgSession::Impl {
   }
 
   // Which of the lane's two source surfaces holds frame `index`, uploading it if neither does.
-  int source(Lane& lane, int64_t index, const PlaneView& frame, std::string& error) {
+  int source(Lane& lane, int64_t index, const PlaneView& frame, const fg::ColorFormat& format,
+             std::string& error) {
     if (lane.cached[0] == index)
       return 0;
     if (lane.cached[1] == index) {
@@ -627,7 +647,7 @@ struct VfgSession::Impl {
       return 0;
     }
     const int slot = lane.cached[0] == -1 ? 0 : 1;  // slot 1 is the older surface once slot 0 is in use
-    if (!upload(lane, slot, index, frame)) {
+    if (!upload(lane, slot, index, frame, format)) {
       error = "NVIDIA Video Frame Generation: uploading a frame to the device failed";
       return -1;
     }
@@ -637,7 +657,7 @@ struct VfgSession::Impl {
 
   // One run on the lane that owns this in-between's context, then the frame read back into RGBS.
   bool tween(int64_t pair, const PlaneView& prev, const PlaneView& cur, const PlaneSink& out, unsigned index,
-             unsigned count, std::string& error) {
+             unsigned count, const fg::ColorFormat& format, std::string& error) {
     if (index < 1 || index > count || count < 1 || count > 7)
       return fail(error, "the frame index is out of range");
     if (!ensureLane(index - 1, error))
@@ -646,14 +666,14 @@ struct VfgSession::Impl {
     CUcontext prevCtx = nullptr;
     if (cuda.ctxPushCurrent(lane.ctx) != 0)
       return fail(error, "the CUDA context could not be bound");
-    const int a = source(lane, pair, prev, error);
-    const int b = a < 0 ? -1 : source(lane, pair + 1, cur, error);
+    const int a = source(lane, pair, prev, format, error);
+    const int b = a < 0 ? -1 : source(lane, pair + 1, cur, format, error);
     if (b < 0) {
       cuda.ctxPopCurrent(&prevCtx);
       return false;
     }
     const float t = static_cast<float>(index) / static_cast<float>(count + 1);
-    const bool ok = run(lane.effect, lane.dev[a], lane.dev[b], lane.dev[2], t, error) && download(lane, out);
+    const bool ok = run(lane.effect, lane.dev[a], lane.dev[b], lane.dev[2], t, error) && download(lane, out, format);
     if (ok && verbose)
       std::fprintf(stderr, "[vvfg] index %u/%u on lane %u at t=%.3f\n", index, count, index - 1,
                    static_cast<double>(t));
@@ -686,31 +706,59 @@ struct VfgSession::Impl {
     return false;
   }
 
-  // Unpack the destination surface back into RGBS float planes.
-  bool download(Lane& lane, const PlaneSink& out) {
+  // Unpack the destination surface back into the caller's planes: RGBS float, or planar YUV when the
+  // caller asked for YUV back (chroma is the average of the subW x subH block).
+  bool download(Lane& lane, const PlaneSink& out, const fg::ColorFormat& format) {
     if (cuda.memcpyDtoHAsync(hostOut, lane.dev[2], frameBytes, lane.stream) != 0)
       return false;
     if (cuda.streamSynchronize(lane.stream) != 0)
       return false;
     const unsigned w = config.width, h = config.height;
-    parallelRows(h, [&](uint32_t y0, uint32_t y1) {
-      for (unsigned y = y0; y < y1; y++) {
-        const unsigned* row = hostOut + static_cast<size_t>(y) * w;
-        float* r = reinterpret_cast<float*>(out.data[0] + static_cast<ptrdiff_t>(y) * out.stride[0]);
-        float* g = reinterpret_cast<float*>(out.data[1] + static_cast<ptrdiff_t>(y) * out.stride[1]);
-        float* b = reinterpret_cast<float*>(out.data[2] + static_cast<ptrdiff_t>(y) * out.stride[2]);
-        for (unsigned x = 0; x < w; x++) {
-          const unsigned v = row[x];
-          if (eightBit) {
-            r[x] = static_cast<float>(v & 255u) * (1.0f / 255.0f);
-            g[x] = static_cast<float>((v >> 8) & 255u) * (1.0f / 255.0f);
-            b[x] = static_cast<float>((v >> 16) & 255u) * (1.0f / 255.0f);
-          } else {
-            r[x] = static_cast<float>(v & 1023u) * (1.0f / 1023.0f);
-            g[x] = static_cast<float>((v >> 10) & 1023u) * (1.0f / 1023.0f);
-            b[x] = static_cast<float>((v >> 20) & 1023u) * (1.0f / 1023.0f);
-          }
+    // One output row from the packed surface into float RGB, shared by both paths below.
+    const auto unpackRow = [&](unsigned y, float* r, float* g, float* b) {
+      const unsigned* row = hostOut + static_cast<size_t>(y) * w;
+      for (unsigned x = 0; x < w; x++) {
+        const unsigned v = row[x];
+        if (eightBit) {
+          r[x] = static_cast<float>(v & 255u) * (1.0f / 255.0f);
+          g[x] = static_cast<float>((v >> 8) & 255u) * (1.0f / 255.0f);
+          b[x] = static_cast<float>((v >> 16) & 255u) * (1.0f / 255.0f);
+        } else {
+          r[x] = static_cast<float>(v & 1023u) * (1.0f / 1023.0f);
+          g[x] = static_cast<float>((v >> 10) & 1023u) * (1.0f / 1023.0f);
+          b[x] = static_cast<float>((v >> 20) & 1023u) * (1.0f / 1023.0f);
         }
+      }
+    };
+    if (!format.isYuv()) {
+      parallelRows(h, [&](uint32_t y0, uint32_t y1) {
+        for (unsigned y = y0; y < y1; y++) {
+          unpackRow(y, reinterpret_cast<float*>(out.data[0] + static_cast<ptrdiff_t>(y) * out.stride[0]),
+                    reinterpret_cast<float*>(out.data[1] + static_cast<ptrdiff_t>(y) * out.stride[1]),
+                    reinterpret_cast<float*>(out.data[2] + static_cast<ptrdiff_t>(y) * out.stride[2]));
+        }
+      });
+      return true;
+    }
+    fg::YuvRowWriter writer;
+    writer.bind(out, format, int(w), int(h));
+    const int subH = format.subH;
+    parallelRows(uint32_t(writer.chromaRows()), [&](uint32_t c0, uint32_t c1) {
+      std::vector<float> rgb(static_cast<size_t>(w) * 3 * static_cast<size_t>(subH));
+      const float* rows[6] = {};
+      for (unsigned cy = c0; cy < c1; cy++) {
+        int count = 0;
+        for (int dy = 0; dy < subH; dy++) {
+          const int y = int(cy) * subH + dy;
+          if (y >= int(h)) break;
+          float* r = rgb.data() + static_cast<size_t>(count) * 3 * static_cast<size_t>(w);
+          unpackRow(unsigned(y), r, r + w, r + static_cast<size_t>(w) * 2);
+          rows[count * 3 + 0] = r;
+          rows[count * 3 + 1] = r + w;
+          rows[count * 3 + 2] = r + static_cast<size_t>(w) * 2;
+          count++;
+        }
+        writer.writeBlock(int(cy), rows, count);
       }
     });
     return true;
@@ -769,13 +817,14 @@ uint32_t VfgSession::height() const { return impl_->config.height; }
 
 bool VfgSession::generate(const PlaneView& prev, const PlaneView& cur, const PlaneView*, const PlaneView*,
                           uint64_t, int64_t pairIndex, uint32_t multiFrameCount, uint32_t multiFrameIndex,
-                          const PlaneSink& out, GenerateResult& result, std::string& error) {
+                          const fg::ColorFormat& format, const PlaneSink& out, GenerateResult& result,
+                          std::string& error) {
   Impl& s = *impl_;
   std::lock_guard<std::mutex> guard(s.lock);
   const double t0 = nowMs();
 
   // multiFrameCount = 1 is the midpoint, 2 gives thirds, 3 quarters, and so on.
-  if (!s.tween(pairIndex, prev, cur, out, multiFrameIndex, multiFrameCount, error)) {
+  if (!s.tween(pairIndex, prev, cur, out, multiFrameIndex, multiFrameCount, format, error)) {
     if (error.empty())
       error = "vvfg: reading the generated frame back failed";
     return false;

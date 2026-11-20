@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "fsr4_vk.h"
+#include "yuv.h"
 
 namespace fsr4 {
 namespace {
@@ -125,7 +126,8 @@ void Gpu::shutdown() { impl_->host.shutdown(); }
 
 const char* Gpu::runtimeName() const { return "vkd3d-proton over Vulkan"; }
 
-bool Gpu::uploadColor(const fg::PlaneView& color, std::string& error) {
+bool Gpu::uploadColor(const fg::PlaneView& color, const fg::ColorFormat& format,
+                      std::string& error) {
   Impl& s = *impl_;
   auto* base = static_cast<uint8_t*>(s.host.colorUpload());
   if (!base) {
@@ -134,11 +136,28 @@ bool Gpu::uploadColor(const fg::PlaneView& color, std::string& error) {
   }
   const size_t pitch = s.host.colorRowPitch();
   const bool half = s.colorHalf;
+  const bool yuv = format.isYuv();
+  const fg::YuvQuant yq = fg::yuvQuant(format.bits, format.fullRange);
+  const fg::YuvCoefficients co = fg::yuvCoefficients(format.matrix);
   parallelRows(s.height, [&](uint32_t yBegin, uint32_t yEnd) {
+    std::vector<float> rgb(yuv ? size_t(s.width) * 3 : 0);
+    float* ycR = yuv ? rgb.data() : nullptr;
+    float* ycG = yuv ? rgb.data() + s.width : nullptr;
+    float* ycB = yuv ? rgb.data() + size_t(s.width) * 2 : nullptr;
     for (uint32_t y = yBegin; y < yEnd; ++y) {
-      const float* r = reinterpret_cast<const float*>(color.data[0] + y * color.stride[0]);
-      const float* g = reinterpret_cast<const float*>(color.data[1] + y * color.stride[1]);
-      const float* b = reinterpret_cast<const float*>(color.data[2] + y * color.stride[2]);
+      const float* r;
+      const float* g;
+      const float* b;
+      if (yuv) {
+        fg::yuvRowToRgb(color, format, int(s.width), int(s.height), int(y), yq, co, ycR, ycG, ycB);
+        r = ycR;
+        g = ycG;
+        b = ycB;
+      } else {
+        r = reinterpret_cast<const float*>(color.data[0] + y * color.stride[0]);
+        g = reinterpret_cast<const float*>(color.data[1] + y * color.stride[1]);
+        b = reinterpret_cast<const float*>(color.data[2] + y * color.stride[2]);
+      }
       uint8_t* row = base + size_t(y) * pitch;
       if (half) {
         auto* dst = reinterpret_cast<uint16_t*>(row);
@@ -202,7 +221,7 @@ bool Gpu::waitShared(uint64_t value, std::string& error) {
   return impl_->host.waitTimeline(value, error);
 }
 
-bool Gpu::readback(const fg::PlaneSink& out, std::string& error) {
+bool Gpu::readback(const fg::PlaneSink& out, const fg::ColorFormat& format, std::string& error) {
   Impl& s = *impl_;
   if (!s.host.download(error)) return false;
   const auto* base = static_cast<const uint8_t*>(s.host.colorRead());
@@ -212,26 +231,52 @@ bool Gpu::readback(const fg::PlaneSink& out, std::string& error) {
   }
   const size_t pitch = s.host.colorRowPitch();
   const bool half = s.colorHalf;
-  parallelRows(s.height, [&](uint32_t yBegin, uint32_t yEnd) {
-    for (uint32_t y = yBegin; y < yEnd; ++y) {
-      const uint8_t* row = base + size_t(y) * pitch;
-      float* r = reinterpret_cast<float*>(out.data[0] + y * out.stride[0]);
-      float* g = reinterpret_cast<float*>(out.data[1] + y * out.stride[1]);
-      float* b = reinterpret_cast<float*>(out.data[2] + y * out.stride[2]);
-      if (half) {
-        const auto* src = reinterpret_cast<const uint16_t*>(row);
-        for (uint32_t x = 0; x < s.width; ++x) {
-          r[x] = fromHalf(src[size_t(x) * 4 + 0]);
-          g[x] = fromHalf(src[size_t(x) * 4 + 1]);
-          b[x] = fromHalf(src[size_t(x) * 4 + 2]);
-        }
-      } else {
-        for (uint32_t x = 0; x < s.width; ++x) {
-          r[x] = row[size_t(x) * 4 + 0] * (1.0f / 255.0f);
-          g[x] = row[size_t(x) * 4 + 1] * (1.0f / 255.0f);
-          b[x] = row[size_t(x) * 4 + 2] * (1.0f / 255.0f);
-        }
+  const auto unpackRow = [&](uint32_t y, float* r, float* g, float* b) {
+    const uint8_t* row = base + size_t(y) * pitch;
+    if (half) {
+      const auto* src = reinterpret_cast<const uint16_t*>(row);
+      for (uint32_t x = 0; x < s.width; ++x) {
+        r[x] = fromHalf(src[size_t(x) * 4 + 0]);
+        g[x] = fromHalf(src[size_t(x) * 4 + 1]);
+        b[x] = fromHalf(src[size_t(x) * 4 + 2]);
       }
+    } else {
+      for (uint32_t x = 0; x < s.width; ++x) {
+        r[x] = row[size_t(x) * 4 + 0] * (1.0f / 255.0f);
+        g[x] = row[size_t(x) * 4 + 1] * (1.0f / 255.0f);
+        b[x] = row[size_t(x) * 4 + 2] * (1.0f / 255.0f);
+      }
+    }
+  };
+  if (!format.isYuv()) {
+    parallelRows(s.height, [&](uint32_t yBegin, uint32_t yEnd) {
+      for (uint32_t y = yBegin; y < yEnd; ++y) {
+        unpackRow(y, reinterpret_cast<float*>(out.data[0] + y * out.stride[0]),
+                  reinterpret_cast<float*>(out.data[1] + y * out.stride[1]),
+                  reinterpret_cast<float*>(out.data[2] + y * out.stride[2]));
+      }
+    });
+    return true;
+  }
+  fg::YuvRowWriter writer;
+  writer.bind(out, format, int(s.width), int(s.height));
+  const int subH = format.subH;
+  parallelRows(uint32_t(writer.chromaRows()), [&](uint32_t c0, uint32_t c1) {
+    std::vector<float> rgb(size_t(s.width) * 3 * size_t(subH));
+    const float* rows[6] = {};
+    for (uint32_t cy = c0; cy < c1; ++cy) {
+      int count = 0;
+      for (int dy = 0; dy < subH; ++dy) {
+        const int y = int(cy) * subH + dy;
+        if (y >= int(s.height)) break;
+        float* r = rgb.data() + size_t(count) * 3 * size_t(s.width);
+        unpackRow(uint32_t(y), r, r + s.width, r + size_t(s.width) * 2);
+        rows[count * 3 + 0] = r;
+        rows[count * 3 + 1] = r + s.width;
+        rows[count * 3 + 2] = r + size_t(s.width) * 2;
+        count++;
+      }
+      writer.writeBlock(int(cy), rows, count);
     }
   });
   return true;

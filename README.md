@@ -17,12 +17,11 @@ src (vs-dlssg\src) ──┬── vdlssg.dll   DLSS-G       D3D12 + NGX（引�
 import vapoursynth as vs
 core = vs.core
 
-src = core.ffms2.Source(r"input.mkv")
-src = core.resize.Bicubic(src, format=vs.RGBS, matrix_in_s="709")   # 必须 RGBS
+src = core.ffms2.Source(r"input.mkv")            # 平面 YUV 直接给，插件自己转
+# 需要 RGB 流程时才转：src = core.resize.Bicubic(src, format=vs.RGBS, matrix_in_s="709")
 
 out = core.vdlssg.FrameGen(src, multi=2, scene_threshold=0.25,
                            proxy_dir=r"E:\code\dlssg-vfi\vs-dlssg\bin\dlss45")
-out = core.std.AssumeFPS(out, fpsnum=src.fps_num * 2, fpsden=src.fps_den)
 out.set_output()
 ```
 
@@ -37,8 +36,10 @@ out = core.vfsr4.FrameGen(src, multi=2, proxy_dir=r"...\fsr4")     # 固定 2×
 参数、输出帧属性、部署（VapourSynth 插件目录 / mpv-lazy）与已知限制见
 [`vs-dlssg\README.md`](vs-dlssg/README.md)；引擎间的差异与取舍见 `vs-dlssg\docs\engines.md`。
 
-**先了解三条硬约束**：单进程只支持一种帧尺寸；只接受 `RGBS`；插件保持输入 fps 不变而把帧数乘
-`multi`，非 mpv 场景必须自己 `AssumeFPS`，否则播放成慢动作。
+**先了解三条硬约束**：单进程只支持一种帧尺寸与像素布局（`RGBS` 或平面 YUV 二选一，换布局要重启
+进程）；插件把输出帧率乘上 `multi` 并逐帧写好 `_Duration`/`_AbsoluteTime`，不需要（也不要）再自己
+`AssumeFPS`。切镜默认听上游的 `_SceneChangePrev`/`_SceneChangeNext`，上游没有时才用内置检测并
+warning 一次。
 
 ## 基准：八个引擎，同一把尺
 

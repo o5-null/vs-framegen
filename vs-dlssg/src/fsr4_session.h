@@ -24,8 +24,8 @@ class Fsr4Session {
   // this is only ever called with multiFrameCount == 1 and multiFrameIndex == 1.
   bool generate(const fg::PlaneView& prev, const fg::PlaneView& cur, const fg::PlaneView* prevMv,
                 const fg::PlaneView* curMv, uint64_t streamId, int64_t pairIndex,
-                uint32_t multiFrameCount, uint32_t multiFrameIndex, const fg::PlaneSink& out,
-                fg::GenerateResult& result, std::string& error);
+                uint32_t multiFrameCount, uint32_t multiFrameIndex, const fg::ColorFormat& format,
+                const fg::PlaneSink& out, fg::GenerateResult& result, std::string& error);
 
   uint64_t newStream();
 

@@ -27,14 +27,14 @@ class Gpu {
             int adapterIndex, bool log, std::string& error);
   void shutdown();
 
-  bool uploadColor(const fg::PlaneView& color, std::string& error);
+  bool uploadColor(const fg::PlaneView& color, const fg::ColorFormat& format, std::string& error);
   bool uploadMotion(const fg::PlaneView* motion, uint32_t mvWidth, uint32_t mvHeight,
                     std::string& error);
   // Copies the staging buffers into the shared textures and raises `sharedValue` on the fence.
   bool submit(uint64_t sharedValue, std::string& error);
   // Blocks until the bridge raised `value`.
   bool waitShared(uint64_t value, std::string& error);
-  bool readback(const fg::PlaneSink& out, std::string& error);
+  bool readback(const fg::PlaneSink& out, const fg::ColorFormat& format, std::string& error);
 
   const char* runtimeName() const;
 

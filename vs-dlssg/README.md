@@ -2,10 +2,10 @@
 
 VapourSynth 的补帧插件组：默认是 DLSS-G（`vdlssg.FrameGen`），带一个自包含的 **DLSS 4.5（310.9.16）引擎包**，在 RTX 30 系列上通过 sm86 解锁跑 2×–6× 整数倍补帧。同一份源码还编译出三个独立插件，一个引擎一个 DLL：`vxessfg`（Intel XeSS-FG）、`vvfg`（NVIDIA Video Frame Generation）、`vfsr4`（AMD FSR 4 帧生成）。引擎差异、部署与限制见 `docs\engines.md`。
 
-- 输入 RGB 浮点（`RGBS`），输出同样帧率、`multi` 倍帧数
-- 引擎跑在进程内（D3D12 + NGX / CUDA），不经 `dlssg2f.exe` 进程外转发
-- 4K 2× 可实时，1080p 6× 约 3 ms/次
-- 只做补帧，不做色调映射：HDR 片源需要自己解码到 RGBS 并写回传递函数
+- 直接吃平面 YUV（8/10/16 bit，4:2:0 / 4:2:2 / 4:4:4）或 `RGBS`，输出同格式、`multi` 倍帧数、`multi` 倍帧率
+- YUV 进出：不再需要 `resize` 到 RGBS 再转回来，省掉两趟全帧转换（1080p `multi=3` 实测每源帧省 1–3 ms，见下文）
+- 引擎跑在进程内（D3D12 + NGX / CUDA / Vulkan），不经 `dlssg2f.exe` 进程外转发
+- 只做补帧，不做色调映射：HDR 片源仍要自己处理传递函数与元数据
 
 ## 目录
 
@@ -50,36 +50,44 @@ VS_INCLUDE   = E:\code\VFI\.venv\Lib\site-packages\vapoursynth\include
 VCVARS       = C:\software\msvc\VC\Auxiliary\Build\vcvars64.bat
 ```
 
+插件按 `VS_USE_LATEST_API` 编译（当前头是 API 4.2），注册时用 `min(运行时 API, 头文件 API)` 声明版本，所以同一个 DLL 在 API 4.0 / 4.1 / 4.2 的核上都能加载；`clip` 与 `mv` 以 `rpGeneral` 声明为依赖（4.1 起 `getNodeDependency` 能看到这两条边），`log=1` 会打印核的 API 版本。
+
 ## 用法
 
 ```python
 import vapoursynth as vs
 core = vs.core
 
-src = core.ffms2.Source(r"input.mkv")
-src = core.resize.Bicubic(src, format=vs.RGBS, matrix_in_s="709")
+src = core.ffms2.Source(r"input.mkv")          # 420P10 等平面 YUV 直接喂
 
 out = core.vdlssg.FrameGen(
-    src,
-    multi=6,                 # 2..6，输出 multi 倍帧数
-    scene_threshold=0.25,    # 0 关闭切镜检测
+    src,                     # RGBS 也接受（float32 RGB）
+    multi=6,                 # 2..6，输出 multi 倍帧数、multi 倍帧率
+    scene_threshold=0.25,    # 仅当上游没有 _SceneChange* 属性时才用；0 关闭内置检测
     proxy_dir=r"E:\...\vs-dlssg\bin\dlss45",   # 可省略：默认 <DLL 目录>\bin\dlss45
 )
-out = core.std.AssumeFPS(out, fpsnum=src.fps_num * 6, fpsden=src.fps_den)
 out.set_output()
 ```
+
+YUV 的颜色编码不做成参数，而是每对从源帧属性里取（mpv 的 `vf vapoursynth` 会自动写全）：
+
+| 属性 | 缺省 | 说明 |
+|---|---|---|
+| `_Matrix` / `_ColorSpace` | 1（BT.709） | 先读 `_Matrix`，没有再读 `_ColorSpace`（mpv 只写后者，两者数值同为 H.273 编码） |
+| `_Range` | 0（limited） | 1 = full |
+| `_ChromaLocation` | 0（left） | 0 left / 1 center / 2 top-left / 3 top；色度用双线性取样 |
 
 | 参数 | 缺省 | 说明 |
 |---|---|---|
 | `multi` | 2 | 2..6；每对相邻帧插 `multi-1` 张，帧率正好乘 `multi` |
 | `mv` | 无 | 可选光流剪辑（RGB，2 或 3 平面，全尺寸或半尺寸）。**实测这颗运行库基本不使用 mvec**（±30 px 常数场只让输出变化 1.5e-4），可以不给 |
-| `scene_threshold` | 0.15 | 相邻帧三平面 8 采样平均绝对差超过它就判切镜、该对直接 hold。快节奏素材建议 0.25–0.35：实测该片 10 s 内 0.15 会 hold 掉 11% 的帧对 |
+| `scene_threshold` | 0.15 | **只在源帧完全没有 `_SceneChangePrev`/`_SceneChangeNext` 时才用**（会 warning 一次）：相邻帧按 8 像素步长采样的平均绝对亮度差超过它就判切镜、该对直接 hold（RGBS 平均三个通道，YUV 只看亮度平面并按 `_Range` 归一化，两边同为 [0,1] 亮度，阈值含义一致）。快节奏素材建议 0.25–0.35：实测该片 10 s 内 0.15 会 hold 掉 11% 的帧对。上游带切镜属性时（K7sfunc `SCENE_DETECT`、`std.SCDetect`）本参数完全不起作用 |
 | `proxy_dir` | `<DLL 目录>\dlss45` | 引擎包目录，必须含 `version.dll` 与 `dlssg_sm86\` |
 | `gpu` | 无（自动） | DXGI 适配器序号。不写时跟随 sm86 代理：载入代理后读它 install 记录里的 `selected_luid`，选同一张卡；没有记录就取接显示器的 NVIDIA 卡。多显卡机器上旧的 `gpu=0` 可能正是代理没覆写的那张，会报 `0xbad00002` |
 | `camera` | 0 | 相机类型（0 默认 / 1 第一人称 / 2 第三人称 / 3 工具） |
 | `log` | 0 | 每帧向 stderr 打一行毫秒数 |
 
-输出帧属性：`_DLSSGGenerated`（1 = 生成帧）、`_DLSSGFallback`（0 正常 / 1 切镜 hold / 2 抑制 hold / 3 末帧 hold）、`_DLSSGSceneCut`、`_DLSSGMultiFrameIndex`。
+输出帧属性：`_DLSSGGenerated`（1 = 生成帧）、`_DLSSGFallback`（0 正常 / 1 切镜 hold / 2 抑制 hold / 3 末帧 hold）、`_DLSSGSceneCut`、`_DLSSGMultiFrameIndex`。帧率按 `multi` 乘好（`fpsNum` 已约分），每帧另写 `_DurationNum/_DurationDen`，插入帧按一个输出帧间隔推 `_AbsoluteTime`；源的 `_SceneChangePrev/_SceneChangeNext` 会搬到输出时间轴上（组首 / 组尾），所以下游按帧计时或按属性判切都正确。
 
 其它引擎只是换命名空间与 `multi` 上限（参数完全相同）：
 
@@ -98,12 +106,23 @@ VFG 每个中间帧要一条独立 CUDA context（模型把「上一帧」状态
 | 1080p 1920×816 | 108.2 fps 输出 / 4.42 ms | 98.8 fps / 3.29 ms | 101.0 fps / 3.11 ms |
 | 4K 3840×1632 | 45.9 fps / 7.89 ms | 43.0 fps / 5.53 ms | 16.0 fps / 22.62 ms |
 
-（fps 是含解码与 RGBS 转换的端到端输出帧率；ms 是 NGX 单次 `evaluate`。4K 6× 第二次重复会掉到 8.3 fps，显存与带宽吃紧，实时播放不可行。）
+（fps 是含解码与格式转换的端到端输出帧率；ms 是 NGX 单次 `evaluate`。4K 6× 第二次重复会掉到 8.3 fps，显存与带宽吃紧，实时播放不可行。）
+
+YUV 直通相对「先 `resize` 到 RGBS、再转回 YUV」的收益（1080p sintel，240 输出帧，每源帧毫秒，越低越好）：
+
+| 引擎 | YUV 直通 | RGBS 中转 | 差 |
+|---|---|---|---|
+| `vdlssg`（multi=3） | 30.86 | 32.59 | −1.73 |
+| `vxessfg`（multi=3） | 27.98 | 29.18 | −1.20 |
+| `vvfg`（multi=3） | 98.40 | 99.70 | −1.30 |
+| `vfsr4`（multi=2） | 22.40 | 25.25 | −2.85 |
+
+省的是 VS 侧两趟全帧转换；引擎本身的开销不变，所以帧率越高、引擎越慢，相对收益越小。
 
 ## 已知限制
 
 1. **单进程只支持一种帧尺寸**：换分辨率要重启进程，否则报 `vdlssg: only one frame size per process is supported`。
-2. 只接受 `RGBS`（`cfRGB` + `stFloat` + 32 bit + 3 平面），YUV 片源请先 `resize`。
-3. 插件保持输入 fps 不变却把帧数乘 `multi`，非 mpv 场景要自己 `AssumeFPS`，否则播放成慢动作。
+2. 接受两种输入：`RGBS`（`cfRGB` + `stFloat` + 32 bit + 3 平面）或平面 YUV（`cfYUV`、`stInteger`、8/10/16 bit、3 平面、`subSamplingW/H <= 1`，即 4:4:4 / 4:2:2 / 4:2:0）。YUV 片源直接给，不必再 `resize` 到 RGBS；同一进程只允许一种像素布局，换布局要重启进程。
+3. 插件把输出帧率乘上 `multi` 并逐帧写 `_Duration`/`_AbsoluteTime`，**不要**再自己 `AssumeFPS`（会乘两次）。
 4. 不做 HDR 色调映射，输出 8/10 bit SDR 观感；HDR 片源需自行处理传递函数与元数据。
 5. 真实 6× 没有真值可比：用「两帧间隔的中点」当对照时，这颗引擎只比线性 blend 好 3%（MAE 0.156 / VMAF 28.3）；真实用法（相邻帧 + 1/6 步长）观感可用，见 `docs\hsr6x-measure.md`。
