@@ -3,9 +3,10 @@
 结论先行：**上游没有 VapourSynth 插件**，也拿不到可复现的二进制（release 由作者手工构建上传）。
 所以自己写了 VS 插件并**从引擎源码构建 libaji**，代码独立成仓库：
 
-- 插件 + 构建脚本：`E:\code\vsaji`（github.com/o5-null/vsaji，MIT）
-- k7 接入：`E:\code\k7sfunc` 的 `RIFE_AJI`（`src/k7sfunc/mod_memc.py:1110`）
-- 打包产物：`vsaji/dist/aji/`，整体即播放器拓展包的 `<包根>\vs-plugins\aji\`
+- 插件 + 构建脚本：`E:\code\dlssg-vfi\vsaji`（github.com/o5-null/vsaji，MIT）
+- k7 接入：`E:\code\dlssg-vfi\k7sfunc` 的 `RIFE_AJI`（`src/k7sfunc/mod_memc.py:1095`）
+- 打包产物：`vsaji/dist/aji/` → 播放器 `<包根>\vs-plugins\aji\`，其中的 `rife_aji.dll` 单独进
+  `Lib\site-packages\vapoursynth\plugins\`（见 DECISIONS 第 17 条）
 
 本文只留结论与对接约定；构建细节看 vsaji 的 README。
 
@@ -41,7 +42,8 @@ rife\                rife_v4.*.onnx
 - RIFE-only conf 下 `aji_configure` 返回 0；引擎默认走 `ajinative`（ONNX 直读 + CUDA 内核），
   **不建 TensorRT 引擎、不调 trtexec**，所以启动快。
 - 运行时包校验要求 `trt\` 内有 cudart，只放在 `aji.dll` 旁边会拒绝启动。
-- 扁平布局是为了 k7：`Version()["path"]` 就是插件目录，k7 直接在同层找 `aji.dll`、`conf\`、`rife\`。
+- 扁平布局是为了 k7：`Version()` 同时报插件目录与它探测到的 `aji` 目录（同级 `aji.dll` 或
+  下级 `aji\`），k7 优先按这个自报路径找 conf/模型，再退回 `vs-plugins\aji`。
 
 ## 3. 插件接口
 
@@ -87,9 +89,11 @@ chain_1_rife_model=<code>
 
 ## 5. k7 侧
 
-- `src/k7sfunc/mod_memc.py:1110-1217` `RIFE_AJI(input, model, ensemble, fps_in, fps_num,
-  fps_den, sc_mode, gpu)`：`_aji_plugin_dir()` 用 `Version()["path"]` 取目录 → 生成/复用 conf →
-  调 `core.rife_aji.Rife` → `AssumeFPS(fps_in * factor)`；非整数倍率直接报错。
+- `src/k7sfunc/mod_memc.py:1095-1217` `RIFE_AJI(input, model, ensemble, fps_in, fps_num,
+  fps_den, sc_mode, gpu)`：`_aji_runtime_dir()` 依次看 `AJI_DIR` → `Version()["aji"]` → 插件同级/
+  上级 `aji\` → `<包根>\vs-plugins\aji` → 生成/复用 conf → 调 `core.rife_aji.Rife` →
+  `AssumeFPS(fps_in * factor)`；非整数倍率直接报错。
+- `PLAYKIT_MEMC` 也可以直接用：`memc_engine=aji`，顺序在 `rife_nv` 之后（`mod_playkit.py`）。
 - `mpv/portable_config/vs/MEMC_RIFE_AJI.vpy`：`_here` 递归找 `vs-plugins`、`AJI_*` 环境变量。
 - `FORK.md:31` 一行改动说明；`doc/Windows.md:582` 起是用户文档。
 
@@ -100,8 +104,6 @@ chain_1_rife_model=<code>
 - 只支持 4:2:0 8/10bit；其他格式先转。
 - 只吃 RIFE-only conf（带超分链的会被拒绝）。
 - `aji_trt.dll` 仍链接 nvinfer，TensorRT 运行时必须在 `trt\` 里（`aji-runtime.json` 指路，
-  别手写 PATH）。`aji_create` 会无条件建 `IRuntime`，所以纯 RIFE 也绕不过它；打包默认把
-  `nvinfer_lean_11.dll` 改名成 `trt\nvinfer_11.dll`（36 MB，能建 `IRuntime`、不能建 engine），
-  整个包 53 MB（带 4.14 模型 64 MB）。完整库见 vsaji 的 `-FullTensorRT`。
+  别手写 PATH）。
 - 授权：插件 MIT、引擎保留所有权利。仅本机自用时无顾虑；对外分发不要把 libaji 打进包里，
   让使用者自己按 vsaji 的脚本构建。

@@ -1,3 +1,11 @@
+# ── 一起放进来的邻近仓库（各自有 .git，不进本仓库）──────────────
+/k7sfunc/
+/k7sfunc-wiki/
+/k7sfunc-wiki-pages/
+/vs-framegen-wiki-pages/
+/vsaji/
+/mpv-playkit/
+
 # ── 第三方 / 参考 / 大体积素材，不进仓库 ──────────────────────────────
 # 参考插件: SmoothMyVideo 源码与便携版（6 GB，只读参考）
 /参考插件/
