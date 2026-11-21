@@ -1,0 +1,105 @@
+# AnimeJaNai (libaji) 的 RIFE 接进 k7：现状
+
+结论先行：**上游没有 VapourSynth 插件**，也拿不到可复现的二进制（release 由作者手工构建上传）。
+所以自己写了 VS 插件并**从引擎源码构建 libaji**，代码独立成仓库：
+
+- 插件 + 构建脚本：`E:\code\vsaji`（github.com/o5-null/vsaji，MIT）
+- k7 接入：`E:\code\k7sfunc` 的 `RIFE_AJI`（`src/k7sfunc/mod_memc.py:1110`）
+- 打包产物：`vsaji/dist/aji/`，整体即播放器拓展包的 `<包根>\vs-plugins\aji\`
+
+本文只留结论与对接约定；构建细节看 vsaji 的 README。
+
+## 1. 上游事实（研究记录）
+
+- `the-database/mpv` 是带 `vf_animejanai` 的 mpv fork，`license: NOASSERTION`，release **只有
+  Linux**；Windows 构建在 `the-database/mpv-winbuild`（整只 mpv，不是滤镜）。
+- 那个"滤镜"是 mpv 的 `video/filter/vf_animejanai.c`，由 `meson.build:1448-1450` 在
+  `cuda-hwaccel` 可用时**静态编进 mpv**，没有任何运行期加载机制；mpv 的 `mp_filter`/`mp_image`
+  是内部 ABI，不能做成跨版本 DLL。所以 `--vf=animejanai` 只存在于那只预编译 mpv 里。
+- 29 个 `the-database` 仓库里没有任何 VapourSynth 插件仓库；能复用的只有它的
+  `video/filter/aji.h`（C ABI，`AJI_API_VERSION 9`）和 `vf_animejanai.c`（LGPL，作参考）。
+- 引擎 `the-database/animejanai-inference` 的 Windows 二进制是手工构建上传的，
+  `docs/BUILD-WINDOWS.md` 有完整的源码构建流程 —— 我们走这条路，版本按 commit 钉死。
+
+## 2. 我们这套的形态
+
+```
+rife_aji.dll         VS 插件（本仓库写的胶水，MIT）
+aji.dll              libaji dispatcher（源码构建）
+aji_trt.dll          后端：CUDA 原生 RIFE 内核 + TensorRT 引擎路径（源码构建）
+cudart64_13.dll      CUDA 运行时
+aji-runtime.json     {"format":1,"trt":"trt"}
+trt\                 nvinfer_11.dll 等（NVIDIA 公开包，含 cudart 副本）
+conf\                k7 按模型生成的 rife_only_<code>.conf
+rife\                rife_v4.*.onnx
+```
+
+要点：
+
+- 插件只声明/使用 `include/aji.h` 的 C ABI，**不复制、不改写引擎代码**；头文件在构建期从钉住
+  的引擎 commit 导出（只把 `AJI_EXPORT` 的 dllexport 去掉）。
+- RIFE-only conf 下 `aji_configure` 返回 0；引擎默认走 `ajinative`（ONNX 直读 + CUDA 内核），
+  **不建 TensorRT 引擎、不调 trtexec**，所以启动快。
+- 运行时包校验要求 `trt\` 内有 cudart，只放在 `aji.dll` 旁边会拒绝启动。
+- 扁平布局是为了 k7：`Version()["path"]` 就是插件目录，k7 直接在同层找 `aji.dll`、`conf\`、`rife\`。
+
+## 3. 插件接口
+
+```python
+core.rife_aji.Rife(clip, conf, rife_model_dir, factor=2, device=0,
+                   matrix=-1, range=-1, scene_prop=1, lib="", fps=25.0)
+```
+
+| 参数 | 含义 |
+| --- | --- |
+| `conf` / `rife_model_dir` | RIFE-only conf 与 `rife_v4.*.onnx` 所在目录 |
+| `factor` | 2..16；时间轴 `src = n / factor`、`t = (n % factor) / factor` |
+| `scene_prop` | 1 = 读 `_SceneChangeNext` 传 scene 0/1；0 = 交 libaji 内建检测（-1） |
+| `lib` | `aji.dll` 路径；空则按插件目录 → 同层 `aji\` → PATH 找 |
+| `fps` | 只喂 conf 的 `chain_1_max_fps` 判定（必须大于源 fps） |
+
+- 帧：`phase == 0` 或尾部直接 `copyFrame(a)`；`AJI_SCENE` 时同样输出 `a`。
+- 格式：4:2:0 的 8bit（NV12）或 10bit（P010）；10bit 在收发时做 LSB↔MSB 位移。
+- 输出帧数：`(源帧数-1) * factor + 1`（30 帧 2 倍 = 59 帧）。
+- 实例内部一把锁串行：VS 并行取帧不会撞同一个 CUcontext。
+
+## 4. conf 模板（k7 自动生成）
+
+```ini
+[global]
+config_version=2
+backend=TensorRT
+logging=no
+
+[slot_1]
+profile_name=k7 RIFE
+chain_1_max_resolution=4096x2304
+chain_1_max_fps=241
+chain_1_rife=yes
+chain_1_rife_factor_numerator=<factor>
+chain_1_rife_factor_denominator=1
+chain_1_rife_model=<code>
+```
+
+模型编码：`4.14` → `414`、`4.25_lite` → `4251`（4 位代码末位 1 = lite）、
+`4.26` → `426`。**`component-rife 3.12.5` 里没有 4.25_lite**（lite 只有 4.12/4.13/4.14/
+4.15/4.16/4.17/4.22），所以 `4251` 这个 k7 字面量在该模型包上找不到文件。
+
+## 5. k7 侧
+
+- `src/k7sfunc/mod_memc.py:1110-1217` `RIFE_AJI(input, model, ensemble, fps_in, fps_num,
+  fps_den, sc_mode, gpu)`：`_aji_plugin_dir()` 用 `Version()["path"]` 取目录 → 生成/复用 conf →
+  调 `core.rife_aji.Rife` → `AssumeFPS(fps_in * factor)`；非整数倍率直接报错。
+- `mpv/portable_config/vs/MEMC_RIFE_AJI.vpy`：`_here` 递归找 `vs-plugins`、`AJI_*` 环境变量。
+- `FORK.md:31` 一行改动说明；`doc/Windows.md:582` 起是用户文档。
+
+## 6. 限制
+
+- 每帧一次主机↔设备拷贝：VS 帧在系统内存，拿不到解码器的 GPU 帧句柄；mpv 内置滤镜的零拷贝
+  路径这里做不到。1080p 一次往返约 9 MB，相对推理可忽略。
+- 只支持 4:2:0 8/10bit；其他格式先转。
+- 只吃 RIFE-only conf（带超分链的会被拒绝）。
+- `aji_trt.dll` 仍链接 nvinfer，TensorRT 运行时必须在 `trt\` 里（`aji-runtime.json` 指路，
+  别手写 PATH）。
+- 授权：插件 MIT、引擎保留所有权利。仅本机自用时无顾虑；对外分发不要把 libaji 打进包里，
+  让使用者自己按 vsaji 的脚本构建。
