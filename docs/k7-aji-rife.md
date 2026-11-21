@@ -100,6 +100,8 @@ chain_1_rife_model=<code>
 - 只支持 4:2:0 8/10bit；其他格式先转。
 - 只吃 RIFE-only conf（带超分链的会被拒绝）。
 - `aji_trt.dll` 仍链接 nvinfer，TensorRT 运行时必须在 `trt\` 里（`aji-runtime.json` 指路，
-  别手写 PATH）。
+  别手写 PATH）。`aji_create` 会无条件建 `IRuntime`，所以纯 RIFE 也绕不过它；打包默认把
+  `nvinfer_lean_11.dll` 改名成 `trt\nvinfer_11.dll`（36 MB，能建 `IRuntime`、不能建 engine），
+  整个包 53 MB（带 4.14 模型 64 MB）。完整库见 vsaji 的 `-FullTensorRT`。
 - 授权：插件 MIT、引擎保留所有权利。仅本机自用时无顾虑；对外分发不要把 libaji 打进包里，
   让使用者自己按 vsaji 的脚本构建。
