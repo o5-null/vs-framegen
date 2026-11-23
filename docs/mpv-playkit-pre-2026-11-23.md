@@ -236,6 +236,22 @@ HEAD `a54f7d8`）对应的 GitHub 仓库 `o5-null/mpv-winbuild-cmake` 此前已 
   viewport after scale changes`）为目标，14 个补丁里只有 `cd313c6` 的 build.yml
   modify/delete 冲突被自动解掉，rebase 全部成功。本地 master 已同步到该结果。
 
+## 推送后 CI 验证（2026-11-23 20:41）
+
+`git push --force-with-lease fork master`（`cd313c6...d970efe`）后三个 workflow 均按预期：
+
+| run | 结果 | 关键日志 |
+| --- | --- | --- |
+| `lint` 45175936764 | success 32s | editorconfig / pre-commit / lua / ruff / mypy / swift 全 ✓ |
+| `playkit-windows` 45175936891 | success 3m41s | seeds `mpv.exe` 16,015,872 B、`mpv.com` 25,600 B、`libmpv-2.dll` 15,998,464 B；141 文件，raw 199.9 MiB，zip 78,308,027 B（74.7 MiB） |
+| `sync-upstream` 45176605828（手动 dispatch） | success 21s | 检查步骤通过；上游无新提交，rebase / 推回两步跳过 |
+
+- CI 包比本地多 15 个 DLL，是 `msys2 update:true` 拉到的新版依赖，属正常。
+- `Create release` 按 tag-only 条件跳过。
+- 唯一告警：Node.js 20 弃用（`actions/checkout@v4`、`actions/upload-artifact@v4`），不影响构建。
+- `sync-upstream` 的 rebase / force-push 分支在 CI 上尚未真实命中（上游未动），
+  但同一段脚本已在本地以 `1eb941f` 为上游完整跑通。
+
 ## 待办
 
 - 想彻底去掉 `ggml-1.dll` / `ggml-base-1.dll` / `libwhisper-1.dll` 只能自建 ffmpeg
