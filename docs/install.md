@@ -15,19 +15,21 @@
 它只通过 GitHub Actions artifact 交付、不发 release，取最新的
 `mpv-playkit-pre-<版本>-windows-x64.zip` 解压即可。
 
-帧生成不在基础包里（体积与第三方运行库的原因），再把同一个 artifact 列表里的
-`mpv-playkit-pre-<版本>-windows-x64-pack-framegen.zip` 解压到**同一个根目录覆盖合并**：
+帧生成插件 DLL 已经在基础包里；引擎（以及可选的推理档）是单独的补丁包，把同一个 artifact 列表里的
+`mpv-playkit-pre-<版本>-windows-x64-pack-vsdlssg.zip` 解压到**同一个根目录覆盖合并**（默认档，约 43 MB）：
 
 ```text
 mpv-playkit-pre-<版本>-windows-x64\
   mpv.exe
   portable_config\              ← K7sfunc 预设层、脚本
-  Lib\site-packages\vapoursynth\plugins\   ← 补丁包会把四个 DLL 复制到这里自动加载
   vs-plugins\
-    vdlssg.dll  vxessfg.dll  vvfg.dll  vfsr4.dll
-    bin\dlss45\                 ← DLSS-G（6×）代理 + 运行库
-    bin\xessfg\                 ← XeSS-FG（4×）
+    vdlssg.dll  vxessfg.dll  vvfg.dll  vfsr4.dll   ← 基础包自带，脚本首次使用时 LoadPlugin
+    dlss45\                     ← 来自 pack-vsdlssg：DLSS-G（6×）代理 + 运行库
+    xessfg\                     ← 来自 pack-vsdlssg：XeSS-FG（4×）
 ```
+
+需要 TensorRT-RTX 超分/推理的，再叠 `-pack-vs-mlrt.zip`（~841 MB，装到
+`Lib\site-packages\vapoursynth\plugins\vsmlrt\`）。
 
 `Ctrl+Shift+p` / `Ctrl+Shift+o` 是 PLAYKIT 的超分/插帧预设开关（走 RIFE / RIFE_AJI），
 **不包含这四个帧生成引擎**。帧生成要在 mpv 里单独挂：基础包已经带 `portable_config\vs\MEMC_DLSSG_NV.vpy`
@@ -47,7 +49,7 @@ y  vf toggle vapoursynth="~~/vs/MEMC_DLSSG_NV.vpy"
 
 K7 包指 K7sfunc 的 `mpv\portable_config` 覆盖层（`vs\` 下的 `MEMC_*.vpy`、`scripts\` 下的
 `k7f_*.lua`、`script-opts\`）。把它覆盖到自己 mpv 的 `portable_config`，再从本仓库 release 的
-`vs-framegen-<版本>-mpv-lazy.zip` 取 `vs-plugins\`（四个 DLL + 引擎包）。
+`vs-framegen-<版本>.zip` 取 `vs-plugins\`（四个 DLL + 四个引擎包）。
 
 不建议自己从零拼 `vpy`：参数解析、`proxy_dir` 查找、OSD 调参、算力不足降级都在 K7sfunc 的
 `MEMC_DLSSG_NV.vpy` / `k7f_vpypar.lua` / `k7f_memc_guard.lua` 里，直接改那三个文件比复刻省事。
@@ -72,16 +74,16 @@ K7 的 `MEMC_*.vpy` 为了兼容会先试 `vs-plugins\bin\<引擎>` 再试同级
 
 ## 3. release 附件
 
+只有一个包：
+
 | 文件 | 内容 |
 |---|---|
-| `vs-framegen-<版本>-mpv-lazy.zip` | 全量：四个插件 DLL + `dlss45` + `xessfg`（都与 DLL 同级） |
-| `engine-dlss45-mpv-lazy.zip` | 只要 DLSS-G：`vs-plugins\dlss45\` |
-| `engine-xessfg-mpv-lazy.zip` | 只要 XeSS-FG：`vs-plugins\xessfg\` |
+| `vs-framegen-<版本>.zip` | 四个插件 DLL（`vdlssg` / `vxessfg` / `vvfg` / `vfsr4`）+ 四个引擎包（`dlss45` / `xessfg` / `vfg` / `fsr4`），都在 `vs-plugins\` 下、与 DLL 同级 |
 
 每个 release 正文里附 sha256。覆盖安装会保留你自己的 `portable_config`，只动 `vs-plugins\`。
 
-`vvfg` / `vfsr4` 的引擎包涉及 NVIDIA Video Effects 与 AMD FidelityFX 的二进制，体积大、许可独立，
-本仓库不附带；缺失时插件会报 `bin\vfg not found beside the plugin DLL` 一类信息。
+`vvfg` / `vfsr4` 的引擎包是 NVIDIA Video Effects 与 AMD FidelityFX 的原厂二进制（体积大，`vfg` 约
+200 MB），release 包里随附，各自目录下带 `licenses\`；单独分发时按各自许可处理。
 
 ## 4. 参数
 
