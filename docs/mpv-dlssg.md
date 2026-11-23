@@ -108,4 +108,7 @@ v       script-binding k7f_memc_guard/status
 > `mpv-playkit\portable_config\` 是上游每日覆盖目录，不能直接加这个脚本；要进发行包
 > 只能走拓展包的 `portable_config/**` 覆盖层，或等上游 K7sfunc 提供同等能力。
 
+包里四个 VS 补帧预设的实测（吞吐、XeSS-FG 3× 崩溃、新旧 vpy 差异）见
+[`mpv-playkit-vs-engine-check.md`](mpv-playkit-vs-engine-check.md)。
+
 
