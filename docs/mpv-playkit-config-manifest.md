@@ -111,3 +111,71 @@ CI（`.github/workflows/build.yml`）的流程是 `fetch → assemble → smoke 
 最终上传的 artifact 只有 `*-windows-x64-vsdlssg.7z` 与 `*-windows-x64-vs-mlrt.7z`。
 `base` 不能把两个档位的预设并起来：它里面没有 vsmlrt 与各引擎运行时，并进来只会得到
 "能按、播不了"的键，正好违背"禁用不可用 vpy"的初衷。
+
+## 追加：原生滤镜段（2026-11-23）
+
+### 做了什么
+
+- 配置清单新增 `native` 段：`section` / `clear_label` / `clear_command` / `entries`。
+  `build/config.py` 的 `render_native()` 在 `menu.conf` 的 "VF 滤镜" 与 "着色器" 之间
+  生成 "原生滤镜 (&P)" 段，内容只有列出的档位包才出现（当前只有 `vsdlssg`）：
+
+  ```
+  原生滤镜 (&P)
+      清空 (&C)	vf clr playkit; set hwdec auto-copy
+      DLSS 帧生成 (&D)
+          2× (&2)	set hwdec d3d11va; vf set playkit:multi=2:dll=vs-plugins/vdlssg.dll:proxy_dir=vs-plugins/dlss45
+          … 3× / 4× / 5× / 6× 同形
+  ```
+
+- 同时修掉两个 `menu.conf` 渲染缺陷（实测 `menu-data` 才发现）：`select.lua` 只按 `\t+`
+  切分、不认 `#` 注释，原来 `# >>> playkit-config:vf` 这类标记与 "本包未启用" 注释全变成了
+  空菜单项（27 项里有 12 条垃圾）。现在标记行一律加 `hidden=true`，未启用的预设保留命令并加
+  `disabled=true`（灰显不可点，标题写明缺什么）。`input_uosc.conf` 是按键表，注释安全，仍是 `#`。
+- `mpv-src: video/filter/vf_playkit.c` 的相对路径解析改成 "先工作目录、再 mpv.exe 目录"
+  （`pk_abs_path` / `pk_exe_relative_exists`）：NGX 只认绝对路径，而工作目录会被快捷方式、
+  文件关联改掉，便携包从别处启动时原来找不到 `vs-plugins/vdlssg.dll`。
+
+### 实测（这次是真跑了，不是只看结构）
+
+- 菜单：在 stage 里用 `--config-dir` 指到生成的配置跑 `menu-data` 转储，`items=27`、
+  三对标记均为 `state=hidden`，`原生滤镜` 位于 `VF 滤镜` 与 `着色器` 之间，未启用预设为
+  `state=disabled`。
+- 路径回退：把工作目录换成 `E:\code\dlssg-vfi`（不是 stage 目录）再启动 stage 的 `mpv.exe`，
+  滤镜照样加载成功并打出 `playkit: D3D11 adapter ... name=NVIDIA GeForce RTX 3080`、
+  `playkit: vdlssg bridge ready 3840x1632 nv12 bits=8 multi=2` —— 证明相对路径确实是按 exe
+  目录找到的（改之前这里会报 `cannot resolve bridge paths`）。
+- **但是**：桥建起来之后第一帧就报
+  `playkit: vdlssg_bridge_process failed (2): OpenSharedHandle (input) failed (HRESULT 0x80070057)`，
+  之后每帧都退化成 `duplicating frames`。`vs-dlssg\src\fsr4_vk.h:6-10` 早就记过这堵墙：
+  本机（RTX 3080 / 驱动 617.42）D3D12 打不开这些共享面，FSR4 桥因此改走 Vulkan 导入；
+  DLSS-G 桥仍用 `D3D12 OpenSharedHandle`，所以零拷贝这条实际不工作，画面是复制帧。
+- 小分辨率也会失败：`testsrc` 那种小图会先死在 `CreateDlssgFeature failed (NGX 0xbad00002)`，
+  要 1080p 级的源才走到共享面那一步。
+
+### 出包记录
+
+- `mpv-src`：`a67869b`（原 `3876abf`，只因 commit message 不符合上游 `subsystem: 小写` 的
+  lint 规则改写，树一样），tag `playkit-2026.11.23-2` 触发的 CI 产物
+  `mpv-x86_64-playkit-2026.11.23-2.zip`（78309927 字节，sha256 `4496d055…202f4`）已钉进
+  `sources.lock.json`；随包 `mpv.exe --version` 显示 `g3876abfc7`，`--vf=help` 里 `playkit`
+  的描述已是 `PlayKit frame multiplier (D3D11 zero-copy DLSS-G)`。
+- `mpv-playkit`：`af1e6f0`（清单与生成器）、`e1628f1`（AGENTS/DECISIONS + pin）。
+- 两个包本地全流程构建通过（fetch→assemble→smoke→package→verify）：
+  - `mpv-playkit-pre-2026.11.20-e1628f1-windows-x64-vsdlssg.7z`
+    346611556 字节，sha256 `94dd76a0…c9e5eab`，menu.conf 有 "原生滤镜" 段；
+  - `mpv-playkit-pre-2026.11.20-e1628f1-windows-x64-vs-mlrt.7z`
+    691737269 字节，sha256 `cdd5467c…66ee0d3`，只有空的 native 标记、没有该段。
+
+### 复现命令
+
+```powershell
+# 菜单是否解析正确（stage 目录里跑）
+.\mpv.exe --config-dir=<配置目录> --no-terminal --vo=gpu-next --gpu-context=d3d11 `
+  --ao=null --frames=20 --script=<dumpmenu.lua> av://lavfi:testsrc=duration=2:size=640x360:rate=30
+
+# 路径回退 + 零拷贝（从别的工作目录启动，看日志里的 playkit: 行）
+E:\...\stage\mpv.exe --no-terminal --vo=gpu-next --gpu-context=d3d11 --ao=null --hwdec=d3d11va `
+  --vf=playkit:multi=2:dll=vs-plugins/vdlssg.dll:proxy_dir=vs-plugins/dlss45 `
+  --frames=40 --log-file=<log> <1080p 以上的视频>
+```
