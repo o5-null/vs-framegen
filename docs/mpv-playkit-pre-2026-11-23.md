@@ -7,8 +7,8 @@
 
 | 档位 | 产物 | 内容 | 体积 |
 | --- | --- | --- | --- |
-| 默认（`vsdlssg`） | `mpv-playkit-pre-<ver>-windows-x64-vsdlssg.zip` | 完整播放器（自维护 mpv + Python + VS R82 + K7sfunc）+ 四个帧生成 DLL + DLSS-G 4.5 / XeSS-FG / VFG / FSR-FG 四套引擎运行时 | ~498 MB（stage 915 MB） |
-| 可选（`vs-mlrt`） | `mpv-playkit-pre-<ver>-windows-x64-vs-mlrt.zip` | 同上的完整播放器 + `vstrt_rtx`（API4 移植）+ TensorRT-RTX 1.5 + 模型；**不含四颗帧生成引擎运行时** | ~1.09 GB（stage 1.65 GB） |
+| 默认（`vsdlssg`） | `mpv-playkit-pre-<ver>-windows-x64-vsdlssg.7z` | 完整播放器（自维护 mpv + Python + VS R82 + K7sfunc）+ 四个帧生成 DLL + DLSS-G 4.5 / XeSS-FG / VFG / FSR-FG 四套引擎运行时 | ~338 MB（stage 915 MB） |
+| 可选（`vs-mlrt`） | `mpv-playkit-pre-<ver>-windows-x64-vs-mlrt.7z` | 同上的完整播放器 + `vstrt_rtx`（API4 移植）+ TensorRT-RTX 1.5 + 模型；**不含四颗帧生成引擎运行时** | ~681 MB（stage 1.65 GB） |
 
 - 两包**互斥**，各自独立可跑，不再有「基础包 + 覆盖补丁」。
 - `PACK_INFO.json` 记 `full: true`；`manifests/packs/vsdlssg.yml` 有 `default: true`，`common.default_pack()` 保证最多一个默认档。
@@ -73,7 +73,7 @@ cd <包根>
 - 本地 urllib 走 `HTTPS_PROXY=http://127.0.0.1:7890` 下载 GitHub release 资产会 `ssl.SSLEOFError`；改用 `gh release download`，或把资产预放进 `.work/downloads/<id>/`。
 - 上游 release 资产会被替换：`vs-framegen` v0.2.0 原来的 `*-mpv-lazy.zip` 全没了，只剩合并的 `vs-framegen-0.2.0.zip`；lock 里的旧 URL 直接 404。pin 时留意资产名是否还会变。
 
-## 本地验证结果
+## 本地验证结果（zip 时代，产物已被下面的 7z 取代）
 
 - `vsdlssg`（四引擎版）：stage 915.0 MB → zip 498.1 MB，sha256 `49cc0bd4e6c39eb7ae326bb12c0f96e559299e47dca9cc2adbf220e4258f70c4`；`verify --pack` 与 `smoke` 均通过。
 - `vs-mlrt`：stage 1653.2 MB → zip 1086.0 MB，sha256 `3ea92d02be528c7169af420940d94553ace342e018b64462ff5f0f6c60d36929`；校验与 smoke 通过（该包不含四颗帧生成引擎）。
@@ -101,12 +101,68 @@ cd <包根>
 四者 exit=0，只有上游配置噪音（`vulkan-device`/`include`、`element_vcs.lua` 语法错），
 无 vapoursynth/NGX 报错。CI 包与本地包行为一致。
 
+## 7z 出包与复测（2026-11-23 19:00）
+
+用户要求「我们也打 7z」，选最高压缩率，并用 winget 把 7-Zip 装到本机（7-Zip 26.06，
+实际路径 `C:\software\7-Zip\7z.exe`，注册表 `HKLM/HKCU\SOFTWARE\7-Zip` 的 `Path` 都指向它）。
+
+- 新增 `build/sevenzip.py`：`find_7z()`（`PLAYKIT_7Z` → `PATH` → 注册表 → 常见目录）、
+  `create_archive(stage, target, flat)`（cwd=stage + `.` 得到不带顶层目录的条目）、
+  `list_entries/list_names`（`-slt` 输出转正斜杠、目录补 `/`）、`read_member`（`x -so`）。
+  参数 `-t7z -mx=9 -m0=lzma2 -md=128m -mfb=273 -ms=on -mtc=off -mtm=off -mta=off -bd -y`。
+- `build/package.py` 默认出 7z（`--format zip` 保留旧的确定性 zip）；`build/verify.py`
+  的列名/读成员换成两种格式通用的抽象，`check_full_pack_archive` 直接从压缩包读 `PACK_INFO.json`；
+  `.github/workflows/build.yml` 校验与上传改 `*.7z` + `*.sha256`。
+- 提交 `12ad2d4 feat(build): 默认用 7z 最高压缩率出包，verify/CI 同步`。
+- 第一次重出包失败：`OSError: [Errno 28] No space left on device`（E: 0 GB 可用）。
+  清理了历次 stage/zip 与 `tensorrt-rtx__*` 重复下载缓存，共 30.1 GB。教训：`dist/stage`
+  会为每个提交留一整套 0.9–1.65 GB 目录，长时间迭代必须手动回收。
+
+产物（本地提交 `12ad2d4`）：
+
+| 档位 | stage | 7z | sha256 |
+| --- | --- | --- | --- |
+| `vsdlssg` | 915.0 MB | 337.7 MB | `b39f1ac37bd956d527f49e175b683be8f4776db9880504e85988c1de1a9a1406` |
+| `vs-mlrt` | 1653.2 MB | 680.9 MB | `dda4796d1209e28190e9e490d04df96d19a8854b0f38db7b449ecf56fd697bf3` |
+
+同一内容 zip 时代是 498.1 MB / 1086.0 MB：7z 省 32% / 37%（与旧 DECISIONS 第 13 条
+「7z 只省 5MB」的判断相反，那条针对的是把已压缩的模型 zip 再套一层）。
+
+复测（vsdlssg 的 7z 用 `7z x` 解到 `work\pkgtest-7z\...`，exit 0，`mpv.exe`/`PACK_INFO.json`
+都在，`portable_config/playkit-preset.conf` 里 `idle = yes` 生效）：
+
+| 引擎 | 900 帧实时播放 | 掉帧 |
+| --- | --- | --- |
+| DLSS-G | `OUT vf_fps=90` | 0 |
+| XeSS-FG | `OUT vf_fps=90` | 0 |
+| NVIDIA VFG | `OUT vf_fps=60` | 0 |
+| AMD FSR-FG | `OUT vf_fps=60` | 0 |
+
+四者 exit=0。`build smoke` 对 vs-mlrt 的 stage 通过（python 3.15.2 / VS R82 /
+k7sfunc 1.9.0+pre.7 / `mpv v0.42.0-dev-g1e6a68304`）。
+
+新发现的两个测试坑：
+
+- `idle = yes` 生效后，任何“播完 N 帧就退出”的自动化调用都必须显式 `--idle=no`，
+  否则 mpv 播完进入常驻，子进程挂到超时。`build/smoke.py` 的 vapoursynth 链路因此超时过，
+  已给该调用加 `--idle=no`。引擎复测脚本同理。
+- `NGX 0xbad00002`（`CreateDlssgFeature` 失败）不只是 `vo=null` 才会出：短时间连跑多次时，
+  新 7z 包与旧 CI 包**都偶尔**复现一次，下一次同参数即成功——与 `VDLSSG_LOG=1` 的
+  `0xC0000005` 同属 NGX 初始化 flaky，与包内容无关。
+- `--frames=120` 太短，mpv 的 `estimated-vf-fps` 在滤镜链重建时会给 0.4–0.5 的假值；
+  测速至少 `--frames=900`，或用 `--untimed` 量墙上时间（no filter 442 fps、
+  DLSS-G 89 fps，量级一致）。
+
 ## 仓库状态
 
 - `o5-null/mpv-playkit-pre`：`ad90d83`（自维护 mpv + 两档全量包）→ `addff9d`（k7sfunc 重钉 11fea6b）→ `a442aef`（剔除 `__pycache__`）→ `c3c0fcb`（文档：首选推 tag 让 CI 出包）→ `79f8d93`（mpv 钉到 playkit-2026.11.23）→ `9dd2d60`（跟上 vs-framegen v0.2.0 合并发行包），均已推。
 - `o5-null/K7sfunc`：`11fea6b feat(vpy): 四个补帧脚本接入公用参数桥` 已推（`k7f_bridge.lua`/`k7f_vpypar.lua`/`k7f_bridge.py`）。
 - `o5-null/mpv`：`32c60a5`（playkit 桥）、`a9215ea`（打包脚本 + CI）、`16af031`/`d7d5972`/`1e6a683`（CI 修复）、`cd313c6`（只留 Win x64 构建），tag `playkit-2026.11.23`。
-- 本地未推：`mpv-playkit` `cf93551`（README/DECISIONS 体积与四引擎说明）；根仓库 `9fb41ab` 及本次 CI 复测文档更新。
+- 本地未推（`mpv-playkit`）：`cf93551`（README/DECISIONS 体积与四引擎说明）、
+  `8001ddb`（overlay 默认 `idle = yes`）、`12ad2d4`（默认 7z 出包）；根仓库：
+  `9fb41ab`、CI 复测文档、7z 文档更新（本文与 `docs/install.md`）。
+- 三个更早的提交（mpv-playkit `cf93551`、根仓库 `9fb41ab`/`de991bc`）此前已问过用户是否推送，
+  仍未答复；按仓库约定不自动 push。
 
 ## 待办
 

@@ -12,14 +12,15 @@
 <https://github.com/o5-null/mpv-playkit-pre>
 
 解压即用的 Windows x64 便携 mpv（自带 Python、VapourSynth、K7sfunc 预设层），不写注册表、不打安装器。
-它只通过 GitHub Actions artifact 交付、不发 release，按档位各取一个**完整包**解压即可：
+它只通过 GitHub Actions artifact 交付、不发 release，按档位各取一个**完整包**解压即可
+（包是 `7z` 最高压缩率，需要 [7-Zip](https://www.7-zip.org/) 或兼容工具）：
 
 | 档位 | 包 | 用途 |
 |---|---|---|
-| 默认 | `mpv-playkit-pre-<版本>-windows-x64-vsdlssg.zip` | 播放 + 四个帧生成引擎（DLSS-G / XeSS-FG / VFG / FSR-FG），大多数机器选这个 |
-| 推理 | `mpv-playkit-pre-<版本>-windows-x64-vs-mlrt.zip` | 播放 + TensorRT-RTX 超分/去块/RIFE/DRBA（体积大，需 Turing+ 驱动）；**不带四个帧生成引擎运行时** |
+| 默认 | `mpv-playkit-pre-<版本>-windows-x64-vsdlssg.7z`（约 338 MB） | 播放 + 四个帧生成引擎（DLSS-G / XeSS-FG / VFG / FSR-FG），大多数机器选这个 |
+| 推理 | `mpv-playkit-pre-<版本>-windows-x64-vs-mlrt.7z`（约 681 MB） | 播放 + TensorRT-RTX 超分/去块/RIFE/DRBA（体积大，需 Turing+ 驱动）；**不带四个帧生成引擎运行时** |
 
-**不再需要叠加补丁包**：每个 zip 都是完整播放器，解压出来的目录结构一致：
+**不再需要叠加补丁包**：每个归档都是完整播放器，解压出来的目录结构一致：
 
 ```text
 mpv-playkit-pre-<版本>-windows-x64-vsdlssg\
@@ -35,6 +36,10 @@ mpv-playkit-pre-<版本>-windows-x64-vsdlssg\
 （插件 + TensorRT-RTX 运行库 + 模型），但**不含**上面四颗帧生成引擎的运行时；
 要两者兼得，把默认档的 `vs-plugins\{dlss45,xessfg,vfg,fsr4}` 拷进 `vs-mlrt` 档即可。
 四个 DLL 所有档位都有。两档互斥：想换档就整个目录换掉。
+
+双击 `mpv.exe`（不带文件）会打开 `No file - mpv` 空窗口并常驻：包里
+`portable_config\playkit-preset.conf` 默认 `idle = yes`，覆盖了上游 `mpv.conf` 的 `idle = no`，
+关窗或按 `q` 退出。双击视频文件、把文件拖进窗口照常播放。
 
 `Ctrl+Shift+p` / `Ctrl+Shift+o` 是 PLAYKIT 的超分/插帧预设开关（走 RIFE / RIFE_AJI），
 **不包含这四个帧生成引擎**。帧生成要在 mpv 里单独挂：包里已经带 `portable_config\vs\MEMC_DLSSG_NV.vpy`
