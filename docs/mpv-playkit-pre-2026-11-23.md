@@ -79,11 +79,34 @@ cd <包根>
 - `vs-mlrt`：stage 1653.2 MB → zip 1086.0 MB，sha256 `3ea92d02be528c7169af420940d94553ace342e018b64462ff5f0f6c60d36929`；校验与 smoke 通过（该包不含四颗帧生成引擎）。
 - CI：`gh run 45153398904`（headSha `9dd2d60`）**success**，10:08:51Z 起、10:15:23Z 完，artifact `mpv-playkit-pre-windows-x64` 1,580,184,957 B，内含两档 zip。
 
+## CI 产物复测（2026-11-23 18:2x）
+
+从 run 45153398904 下载 artifact 到 `work\ci-packs`：
+
+| 文件 | 大小 | sha256 |
+| --- | --- | --- |
+| `mpv-playkit-pre-2026.11.20-9dd2d60-windows-x64-vsdlssg.zip` | 498,123,271 B | `E4061BA17960DF8827811D36292A19945372B11EFA1440E6716326FEABCACA13` |
+| `mpv-playkit-pre-2026.11.20-9dd2d60-windows-x64-vs-mlrt.zip` | 1,086,056,548 B | `2489184F90944EB2D188D61F81F79F54623C7D96501E668A4CA3FADE4B87FFCC` |
+
+与本地 79f8d93 构建的 sha 不同属预期（版本串内嵌提交号不同）；解压 CI 版 vsdlssg 到
+`work\pkgtest-ci\mpv-playkit-pre-2026.11.20-9dd2d60-windows-x64-vsdlssg` 后，用同一命令与源复测：
+
+| 引擎 | CI 包实测 | 本地包实测 |
+| --- | --- | --- |
+| DLSS-G | `OUT vf_fps=90` | `OUT vf_fps=90` |
+| XeSS-FG | `OUT vf_fps=90` | `OUT vf_fps=90` |
+| NVIDIA VFG | `OUT vf_fps=60` | `OUT vf_fps=60` |
+| AMD FSR-FG | `OUT vf_fps=60` | `OUT vf_fps=60` |
+
+四者 exit=0，只有上游配置噪音（`vulkan-device`/`include`、`element_vcs.lua` 语法错），
+无 vapoursynth/NGX 报错。CI 包与本地包行为一致。
+
 ## 仓库状态
 
 - `o5-null/mpv-playkit-pre`：`ad90d83`（自维护 mpv + 两档全量包）→ `addff9d`（k7sfunc 重钉 11fea6b）→ `a442aef`（剔除 `__pycache__`）→ `c3c0fcb`（文档：首选推 tag 让 CI 出包）→ `79f8d93`（mpv 钉到 playkit-2026.11.23）→ `9dd2d60`（跟上 vs-framegen v0.2.0 合并发行包），均已推。
 - `o5-null/K7sfunc`：`11fea6b feat(vpy): 四个补帧脚本接入公用参数桥` 已推（`k7f_bridge.lua`/`k7f_vpypar.lua`/`k7f_bridge.py`）。
 - `o5-null/mpv`：`32c60a5`（playkit 桥）、`a9215ea`（打包脚本 + CI）、`16af031`/`d7d5972`/`1e6a683`（CI 修复）、`cd313c6`（只留 Win x64 构建），tag `playkit-2026.11.23`。
+- 本地未推：`mpv-playkit` `cf93551`（README/DECISIONS 体积与四引擎说明）；根仓库 `9fb41ab` 及本次 CI 复测文档更新。
 
 ## 待办
 
