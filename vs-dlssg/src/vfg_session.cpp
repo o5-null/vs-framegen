@@ -152,6 +152,21 @@ PfnGetAttr g_realGetAttr = nullptr;
 PfnModuleLoad g_realLoad = nullptr;
 std::atomic<int> g_patched{0};
 
+// Keep this image mapped for the rest of the process.
+// The hooks below are written into the model DLL's import table and point at code in here. VapourSynth unloads a
+// plugin DLL together with its environment; if that happened, the model (whose LoadLibrary handle is never
+// released) would keep import slots that no longer point at mapped code, and the saved real entry points would be
+// gone with the image. Pinning costs one mapping and removes both hazards. Called from patchIat before the first
+// slot is rewritten, so it also covers model DLLs mapped by an earlier environment.
+void pinPluginImage() {
+  static std::once_flag once;
+  std::call_once(once, [] {
+    HMODULE self = nullptr;
+    GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
+                       reinterpret_cast<LPCWSTR>(&pinPluginImage), &self);
+  });
+}
+
 // How much of the image is safely readable: the loader is handed a pointer into the model's own buffer, whose
 // length it never states. Walk committed regions instead of guessing.
 size_t committedSpan(const void* image, size_t want) {
@@ -226,6 +241,12 @@ int patchIat(HMODULE module) {
   void* fnLoad = reinterpret_cast<void*>(GetProcAddress(nvcuda, "cuModuleLoadData"));
   if (!fnAttr || !fnLoad)
     return 0;
+  // Take the real entry points straight from nvcuda's exports instead of the import slot. A slot can already hold
+  // the hook of an earlier load of this DLL (same image base after unload/reload) or a hook whose image is gone,
+  // and copying either of those into g_real* would hand the hook a pointer that crashes on its first call.
+  pinPluginImage();
+  g_realGetAttr = reinterpret_cast<PfnGetAttr>(fnAttr);
+  g_realLoad = reinterpret_cast<PfnModuleLoad>(fnLoad);
   auto* base = reinterpret_cast<unsigned char*>(module);
   auto* dos = reinterpret_cast<IMAGE_DOS_HEADER*>(base);
   if (dos->e_magic != IMAGE_DOS_SIGNATURE)
@@ -257,17 +278,13 @@ int patchIat(HMODULE module) {
       if (!replacement)
         continue;
       if (*slot == replacement) {
-        // Already patched earlier in this process: keep the original entry points we saved then.
+        // Already points at this image's hook (patched by an earlier environment): nothing to rewrite.
         hits++;
         continue;
       }
       DWORD oldProt = 0;
       if (!VirtualProtect(slot, sizeof(void*), PAGE_READWRITE, &oldProt))
         continue;
-      if (replacement == reinterpret_cast<void*>(&hookGetAttr))
-        g_realGetAttr = reinterpret_cast<PfnGetAttr>(*slot);
-      else
-        g_realLoad = reinterpret_cast<PfnModuleLoad>(*slot);
       *slot = replacement;
       VirtualProtect(slot, sizeof(void*), oldProt, &oldProt);
       hits++;
