@@ -1,8 +1,9 @@
 ### NVIDIA Video Frame Generation 补帧（NVVFG 模型）—— N 卡专用
 ### 依赖：vs-plugins\vvfg.dll + vs-plugins\bin\vfg\（引擎包：nvVFXVideoFrameGeneration.dll 等）
 ### 用法：vf set vapoursynth="~~/vs/MEMC_VFG_NV.vpy"
-### 特点：固定 2×，模型只填一对相邻帧的中间那一张
-### 注意：1080p 约 20 ms/对，且耗时几乎不随分辨率变化（4K 约 23 ms）
+### 特点：2×~6× 可调；每个内插点独占一条 CUDA lane（各写自己的模型历史）
+### 注意：1080p 每张内插约 30 ms、每条 lane 约 1.5 GB 显存；4K 像素 4 倍，10 GB 卡只够 2×
+### 注意：倍数越高真实输出越低（1080p60 源实测：2× 约 32 fps，6× 约 7 fps）
 ### 注意：NGX 路径的 DLSS-G/XeSS-FG 与本引擎不要加载进同一个进程
 
 import os
@@ -26,7 +27,8 @@ Scene = 0.25
 Gpu = None
 Pre_H = 0
 Log = False
-## 固定 2：这个模型只在两帧中间插一张，写别的值插件会直接报错
+## 整数 2..6：输出倍数。插件为每个内插点开一条 CUDA lane（显存 ×(Multi-1)），
+##   vfg 模型本身能连续内插，不需要"只填中点"；越界会报 "multi must be between 2 and 6"
 ## 浮点，切镜阈值（三平面 8 采样平均绝对差），0 关闭
 ##   快节奏/粒子闪白素材建议 0.25，否则默认行为会把部分帧对 hold 成重复帧；更稳妥用 0.35
 ## 整数，DXGI 显卡序号，0 为排序一号；None 用 0（本引擎不经过 sm86 代理，没有"跟随代理"这回事）
@@ -53,6 +55,8 @@ def _parse_user_data(s):
 
 
 # 调试用环境变量覆盖（正常播放不用管）
+if os.environ.get("VVFG_MULTI"):
+    Multi = max(2, min(6, int(os.environ["VVFG_MULTI"])))
 if os.environ.get("VVFG_SCENE"):
     Scene = float(os.environ["VVFG_SCENE"])
 if os.environ.get("VVFG_PRE_H"):
@@ -61,9 +65,11 @@ if os.environ.get("VVFG_LOG"):
     Log = True
 
 # 环境变量之后再套 OSD 参数，保证用户在 OSD 上的选择优先级最高
-# 注意：Multi 固定为 2，不处理 "multi" 键（插件写别的值会报错）
 _ud = _parse_user_data(globals().get("user_data"))
 if _ud:
+    if "multi" in _ud:
+        # 夹到插件接受的范围：越界会让 FrameGen 在求值阶段直接报错
+        Multi = max(2, min(6, int(float(_ud["multi"]))))
     if "scene" in _ud:
         Scene = max(0.0, float(_ud["scene"]))
     if "pre_h" in _ud:
@@ -79,6 +85,9 @@ if _ud:
 if not hasattr(core, "vvfg"):
     _here = os.path.dirname(os.path.abspath(__file__))
     for _cand in (
+        # mpv-playkit 包：vpy 在 <包根>\portable_config\vs，DLL 在 <包根>\vs-plugins
+        os.path.join(_here, os.pardir, os.pardir, "vs-plugins", "vvfg.dll"),
+        # mpv-lazy / 开发树：<上层>\vs-plugins\vvfg.dll
         os.path.join(_here, os.pardir, "vs-plugins", "vvfg.dll"),
         os.path.join(_here, "vvfg.dll"),
         # 开发树：..\..\vs-dlssg\bin\vvfg.dll（脚本就在仓库 vs-dlssg\mpv\ 下时）
@@ -123,7 +132,7 @@ if not out.fps_num or not out.fps_den:
 
 # 上行报告：告诉 mpv 实际生效的参数；写盘失败只影响 OSD，不会被这里打断
 if k7fb is not None:
-    _summary = "2×（固定） · 切镜 %g" % Scene
+    _summary = "%d× · 切镜 %g" % (Multi, Scene)
     if Pre_H:
         _summary += " · 预缩 %dp" % Pre_H
     k7fb.publish(
