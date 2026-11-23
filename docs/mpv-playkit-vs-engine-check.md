@@ -179,3 +179,37 @@ os.path.join(_here, os.pardir, os.pardir, "vs-plugins", "<dll>")
   点“跟随预设”→ 回落 2×、状态文件删除；重启后带着 `{ "multi": 4 }` 直接套预设即为 4×。
 - `menu.conf` 里带命令的条目不能当父菜单（否则 select.lua 报
   `has leading whitespace but no parent menu was defined`），所以六个倍数项都在一级。
+
+## 附：安装包级复测（version `1c54d66`）
+
+三份产物都在 `E:\code\dlssg-vfi\mpv-playkit\dist\out\`，构建命令为
+`python -m build all`（基础包）与 `python -m build pack --name vsdlssg --name vs-mlrt`，
+两者都带本地覆盖 `PLAYKIT_LOCAL_K7SFUNC` / `PLAYKIT_LOCAL_VS_FRAMEGEN_DLLS`：
+
+| 产物 | 大小 | SHA-256 |
+| --- | --- | --- |
+| `mpv-playkit-pre-2026.11.20-1c54d66-windows-x64.7z` | 163.7 MB | `2bd72f4fdb89be21a581d9399c7aeebf555b59b9cf2058da872e83c13d405e82` |
+| `mpv-playkit-pre-2026.11.20-1c54d66-windows-x64-vsdlssg.7z` | 346.6 MB | `d885731deec8f51434f3ffce93a0cf0c7cdc8f69953dd629a04393a4d49a9dce` |
+| `mpv-playkit-pre-2026.11.20-1c54d66-windows-x64-vs-mlrt.7z` | 691.9 MB | `0f8eafa79e60b63afeedbe3b38d3663a305a1983cab24175c44b99da4e894260` |
+
+冒烟（`python -m build all` 自带）：`python 3.15.2`、`vapoursynth R82`、
+`k7sfunc 1.9.0+pre.7`、`mpv v0.42.0-dev-g3876abfc7-dirty`、`yt-dlp 2026.10.26`，
+三步全绿且无 `unknown key` 警告。第三步曾因基准 `portable_config\mpv.conf:52`
+的 `keep-open = yes` 停在 (Paused) 而 300 秒超时，`build\smoke.py` 已补 `--keep-open=no`。
+
+档位包 stage 核对（`dist\stage\mpv-playkit-pre-2026.11.20-1c54d66-windows-x64-vsdlssg`）：
+
+- `portable_config\menu.conf:53-61` 是 `倍数 (&M)` 段，含 `跟随预设 (&F)` 与 `2×`..`6×`；
+- `portable_config\scripts\k7f_multi.lua`（7304 B）随包分发；
+- `vs-plugins\vvfg.dll` 79872 B，即修复反复初始化后的构建；
+- `portable_config\vs` 里只剩本档启用的 5 个 vpy（DLSSG / FSR4 / MVT_LQ / VFG / XeSS-FG）。
+
+用该 stage 直接跑一遍菜单命令（`multitest13.lua`，`--pack` 生成的配置、未经改动的
+`k7f_multi.lua`）：
+
+- A（未设倍数）：`estimated-vf-fps=120`，sidecar `multi:2` / `output.fps 120.0`；
+- `script-message-to k7f_multi set 4` → B：`user-data=multi=4`、sidecar `multi:4` /
+  `output.fps 240.0`、状态文件 `{ "multi": 4 }`；
+- `script-message-to k7f_multi clear` → C：`user-data=nil`、sidecar 回落 `multi:2` /
+  `120.0`、状态文件删除；
+- 全程 `exit=0`，即打包后的插件已经能在同一进程里连续重建滤镜（此前必崩的路径）。
