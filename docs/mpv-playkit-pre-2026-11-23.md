@@ -164,6 +164,35 @@ k7sfunc 1.9.0+pre.7 / `mpv v0.42.0-dev-g1e6a68304`）。
 - 三个更早的提交（mpv-playkit `cf93551`、根仓库 `9fb41ab`/`de991bc`）此前已问过用户是否推送，
   仍未答复；按仓库约定不自动 push。
 
+## CI lint 转绿（2026-11-23 20:2x）
+
+`o5-null/mpv` 上 `playkit-windows` 已全绿，但同一仓库的 `lint` 一直是红的
+（run 45151597990，cd313c6 之后仍失败）。两处根因都在 `scripts/package_windows.py`：
+
+1. `pre-commit` 的 `check-shebang-scripts-are-executable`：文件有 shebang 但 git 里是 100644，
+   报 `has a shebang but is not marked executable`。
+2. `ruff`（`ruff check . TOOLS/umpv`，规则 F,E,W,N,UP,A,Q,COM，line-length 100）报 6 处：
+   4× `COM812` 缺尾逗号（原 116/189/235/249 行），2× `E501` 超 100 字符
+   （原 311 行 `zf.comment = f"..."` 102 字符、326 行 skipped 复数拼接 106 字符）。
+
+修法：补尾逗号；311 行拆成括号赋值；326 行抽出 `suffix` 变量；
+`git update-index --chmod=+x scripts/package_windows.py`。本地提交 `759c296`
+（`ci: fix lint findings for the Windows package script`），未推。
+
+本地验证：`python -m ruff check . TOOLS/umpv` → All checks passed；`py_compile` 通过；
+`python ci/lint-commit-msg.py cd313c6...HEAD` 通过（注意 subject 前缀不允许括号，
+`ci(playkit): ...` 会被 `subsystem_prefix` 判失败，必须写 `ci: ...`）。
+
+同轮的两个历史红灯不是真故障：`build` workflow（上游多平台矩阵）已在 `cd313c6` 删除，
+故 09:44/09:50 的 aarch64 失败不会重现；`mpv-playkit-pre` 10:01 的 failure 是
+`vs-framegen-0.2.0-mpv-lazy.zip` 404（旧资产名），10:06 用 `build.pin` 重钉到合并发行包
+`vs-framegen-0.2.0.zip` 后，10:08 的 build 已全绿。
+
+另：`E:\code\dlssg-vfi\mpv-winbuild`（shinchiro/mpv-winbuild-cmake 的 fork，
+HEAD `a54f7d8`）对应的 GitHub 仓库 `o5-null/mpv-winbuild-cmake` 现在 404 不存在，
+`gh repo list o5-null` 里也没有；当前发布链不经过它，改用 `playkit-windows.yml`
+的 MSYS2 CLANG64 动态构建 + DLL 闭包平铺。
+
 ## 待办
 
 - `vsaji` 定版后：推 GitHub、发 `dist/aji` release（zip 根 `aji/**`，由 `vsaji/scripts/make-release.py` 生成）、`build.pin --pack vsdlssg --id vsaji`、去 `disable`。
