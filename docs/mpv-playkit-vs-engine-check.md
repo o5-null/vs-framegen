@@ -33,6 +33,23 @@ mpv.exe --no-terminal --vo=gpu-next --gpu-context=d3d11 --ao=null --hwdec=auto-c
 
 全部样本 `hwdec-current=d3d11va-copy`、`exit=0`。
 
+> 表里的数字是 `estimated-vf-fps`，即滤镜**声明的时间轴帧率**（源帧率 × 倍数），
+> 不等于真实吞吐。真实吞吐见下一节。
+
+## 真实吞吐与显存（`.work\vsfps2.lua`，+6s 与 +11s 两次取样算差）
+
+| 预设 | 时间轴 | 实测输出帧率 | 每秒丢帧增加 |
+| --- | --- | --- | --- |
+| DLSSG 3× | 180 | ≈60 fps | ≈56 |
+| XeSS-FG 2× | 120 | ≈54 fps | ≈24 |
+| FSR4 2× | 120 | ≈44 fps | ≈70 |
+| VFG 2× | 120 | ≈32 fps | ≈51 |
+| VFG 6× | 360 | ≈7 fps | ≈37 |
+
+即：这些引擎在 1080p 60fps 源上大多跑不满时间轴，倍数越高真实输出越低（每生成一张
+都要一次引擎推理）。VFG 每个内插点独占一条 CUDA lane，1080p 约 1.5 GB 显存，5 个内插点
+（6×）用掉约 5.6 GB；4K 像素是 1080p 的 4 倍，10 GB 卡在 4K 上只够 2×。
+
 ### XeSS-FG 崩溃原因
 
 包内 `vs-plugins\xessfg\dlssg_sm86\logs\dlssg_sm86.log` 里有确切记录：
@@ -87,3 +104,29 @@ os.path.join(_here, os.pardir, os.pardir, "vs-plugins", "<dll>")
 - 零拷贝（`vf=playkit`）跨显卡共享句柄的根因已定位在
   `vs-dlssg\src\bridge.cpp`（丢弃 D3D11 LUID），本轮不处理，见
   `docs\mpv-playkit-bridge-probe.md`。
+- VFG 的倍数（见下）：脚本注释写的「固定 2×」不成立，但要不要在包里开放 3×~6× 尚未
+  决定。
+
+## 附：VFG 的倍数到底是多少
+
+`MEMC_VFG_NV.vpy` 的头注释与参数注释写「固定 2×，模型只填一对相邻帧的中间那一张，
+写别的值插件会直接报错」，这与当前插件不符：
+
+- `vs-dlssg\src\fg_types.h:44-45`（从初始提交 `3d5c2c3` 起就是这样）：
+
+  ```cpp
+  case Engine::Vfg:
+    return 6;  // one lane (CUDA context) per in-between, each context keeps its own model history
+  ```
+
+  即插件接受 `multi` 2..6，每个内插点一条独立 CUDA lane（`vfg_session.cpp` 的
+  `createLane` / `tween`，`t` 取 `index/(count+1)`）。
+- 实测（同一输入、`VVFG_LOG=1`）：`Multi = 3` → 两条 lane、`t=0.333/0.667`；
+  `Multi = 4` → 三条 lane、`t=0.25/0.5/0.75`；`Multi = 6` → 五条 lane、
+  `t=0.167…0.833`。全部 `exit=0`，时间轴帧率分别是 180 / 240 / 360。
+- 因此 2× 只是 vpy 里的默认值（且 vpy 不接收 `user-data` 的 `multi`），不是引擎限制；
+  `frame_gen.cpp:500-503` 里「video frame generation model only fills the middle …
+  stays at 2x」那句注释同样是残留。
+
+真正的限制是显存和吞吐：lane 数与倍数同增（1080p 每条约 1.5 GB），真实输出帧率随倍数
+下降（2× ≈32 fps、6× ≈7 fps，见上表）。
