@@ -238,6 +238,9 @@ HEAD `a54f7d8`）对应的 GitHub 仓库 `o5-null/mpv-winbuild-cmake` 此前已 
 
 ## 待办
 
+- 想彻底去掉 `ggml-1.dll` / `ggml-base-1.dll` / `libwhisper-1.dll` 只能自建 ffmpeg
+  （configure 里去掉 `--enable-whisper`，其余参数照抄 MSYS2 PKGBUILD）；本轮按选择
+  保持 MSYS2 ffmpeg 不动。
 - `vsaji` 定版后：推 GitHub、发 `dist/aji` release（zip 根 `aji/**`，由 `vsaji/scripts/make-release.py` 生成）、`build.pin --pack vsdlssg --id vsaji`、去 `disable`。
 - `VDLSSG_LOG=1` 偶发访问违例继续观察（NGX 初始化、proxy 适配器、引擎包选择均已确认正常）。
 - 包内上游配置噪音未修（`vulkan-device`/`include` 报错、`xxxxx.lua` 缺失、`uosc_addones/element_vcs.lua:278` 语法错、`script-opts/k7f_playkit.conf` 的 key 带尾随空格、`shaders/hooks_0*.glsl` 缺失）。
