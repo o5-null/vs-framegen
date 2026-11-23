@@ -21,15 +21,25 @@
 ```text
 mpv-playkit-pre-<版本>-windows-x64\
   mpv.exe
-  portable_config\        ← K7sfunc 预设层、脚本
+  portable_config\              ← K7sfunc 预设层、脚本
+  Lib\site-packages\vapoursynth\plugins\   ← 补丁包会把四个 DLL 复制到这里自动加载
   vs-plugins\
     vdlssg.dll  vxessfg.dll  vvfg.dll  vfsr4.dll
-    dlss45\                ← DLSS-G（6×）代理 + 运行库
-    xessfg\                ← XeSS-FG（4×）
+    bin\dlss45\                 ← DLSS-G（6×）代理 + 运行库
+    bin\xessfg\                 ← XeSS-FG（4×）
 ```
 
-启动 mpv 播放视频后：`Ctrl+Shift+p` 切换 PLAYKIT 预设，`Ctrl+Shift+o` 关闭插帧。
-预设里选了帧生成本就自动带这四个插件，不用再手工写 `vf`。
+`Ctrl+Shift+p` / `Ctrl+Shift+o` 是 PLAYKIT 的超分/插帧预设开关（走 RIFE / RIFE_AJI），
+**不包含这四个帧生成引擎**。帧生成要在 mpv 里单独挂：基础包已经带 `portable_config\vs\MEMC_DLSSG_NV.vpy`
+这类脚本，加一条滤镜即可，例如
+
+```ini
+# input.conf
+y  vf toggle vapoursynth="~~/vs/MEMC_DLSSG_NV.vpy"
+```
+
+脚本里的 `Multi` / `Preset` / `Scene` 等默认值可以改文件，也可以用 `vf` 的 user-data 覆盖；
+播放中调参用 `k7f_vpypar.lua`（见第 2 节）。四个 `MEMC_*.vpy` 分别对应 DLSS-G / XeSS-FG / VFG / FSR4。
 
 ## 2. 自行搭建：K7 包
 
@@ -44,27 +54,34 @@ K7 包指 K7sfunc 的 `mpv\portable_config` 覆盖层（`vs\` 下的 `MEMC_*.vpy
 
 ### 引擎包位置
 
-插件按 `<DLL 所在目录>\<proxy_dir>` 找引擎包，`proxy_dir` 默认 `dlss45`：
+发行包把引擎包放在 `vs-plugins\bin\<引擎>\`（与 0.1.0、mpv-playkit 的补丁包一致），K7 脚本
+`MEMC_*.vpy` 会按 `vs-plugins\bin\<引擎>` → `vs-plugins\<引擎>` 的顺序找，并把绝对路径传给插件：
 
 ```text
 <mpv 根目录>\vs-plugins\
   vdlssg.dll
-  dlss45\version.dll        ← 与 DLL 同级
-  dlss45\dlssg_sm86.ini
-  dlss45\dlssg_sm86\runtime\nvngx_dlssg.dll
-  dlss45\dlssg_sm86\kernels\fg_kernels.dll
+  bin\dlss45\version.dll        ← 发行包位置
+  bin\dlss45\dlssg_sm86.ini
+  bin\dlss45\dlssg_sm86\runtime\nvngx_dlssg.dll
+  bin\dlss45\dlssg_sm86\kernels\fg_kernels.dll
 ```
 
-**不是** `vs-plugins\bin\dlss45`，也不是 `vs-plugins\dlss45\bin`。0.1.0 的说明文字曾经写错成
-`bin\dlss45`，如果你照那句多建了一层 `bin\`，可以删掉。
+只有插件自己找的时候（手动 `LoadPlugin`，不带 `proxy_dir`），才会按 `<DLL 所在目录>\dlss45` 这种
+**与 DLL 同级**的位置找。两种都行，选一种即可：
+
+- 用 K7 脚本：保持 `vs-plugins\bin\dlss45`，脚本会传绝对路径；
+- 自己写 vpy：把包放在 DLL 同级（`vs-plugins\dlss45`），或者显式给 `proxy_dir=r"D:\mpv\vs-plugins\bin\dlss45"`。
+
+不要出现 `vs-plugins\bin\dlss45\bin` 这种多套一层的情况。0.1.0 的说明里 "插件只找与 DLL 同级的
+dlss45" 那句话只对手动调用成立，发行包一直用的是 `bin\` 层。
 
 ## 3. release 附件
 
 | 文件 | 内容 |
 |---|---|
-| `vs-framegen-<版本>-mpv-lazy.zip` | 全量：四个插件 DLL + `dlss45` + `xessfg` |
-| `engine-dlss45-mpv-lazy.zip` | 只要 DLSS-G：`vs-plugins\dlss45\` |
-| `engine-xessfg-mpv-lazy.zip` | 只要 XeSS-FG：`vs-plugins\xessfg\` |
+| `vs-framegen-<版本>-mpv-lazy.zip` | 全量：四个插件 DLL + `bin\dlss45` + `bin\xessfg` |
+| `engine-dlss45-mpv-lazy.zip` | 只要 DLSS-G：`vs-plugins\bin\dlss45\` |
+| `engine-xessfg-mpv-lazy.zip` | 只要 XeSS-FG：`vs-plugins\bin\xessfg\` |
 
 每个 release 正文里附 sha256。覆盖安装会保留你自己的 `portable_config`，只动 `vs-plugins\`。
 

@@ -13,6 +13,7 @@
 | `portable_config\menu.conf` / `input_uosc.conf` | 各加一行，绑到 `vf set vapoursynth="~~/vs/MEMC_DLSSG_NV.vpy"` |
 
 `dlss45` 必须与 `vdlssg.dll` **同目录**：插件默认优先加载 `<DLL 所在目录>\dlss45\version.dll`，找不到才回落到 DLL 目录本身（那就只有原版 4× 上限）。`dlss45\dlssg_sm86\logs\` 必须存在，代理自己不建。
+发行包（release 附件）放在 `vs-plugins\bin\dlss45`，`MEMC_DLSSG_NV.vpy` 会先找 `bin\` 再找同级；手工部署按上表放同级即可。
 
 脚本里还有两级兜底：`core.vdlssg` 不存在时依次试 `..\vs-plugins\vdlssg.dll`、`<脚本目录>\vdlssg.dll`、`..\..\..\..\vs-dlssg\bin\vdlssg.dll`（开发树），所以即使 mpv-lazy 的自动加载路径变了也不会直接失败。
 
