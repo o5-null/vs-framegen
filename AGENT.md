@@ -5,6 +5,16 @@
 源码以 .\vs-dlssg\src 为准（一个引擎一个 DLL，build.bat 一次编四个）；.\archive 与 .\ref 只读
 构建产物、引擎包、SDK、第三方装包与媒体素材不进 git（见 .gitignore）；提交前跑 git status 确认没有大文件
 
+## Release 规则
+
+- 安装与用法只维护 `docs\install.md`，release 正文**只写这一版改了什么 + 附件清单与 sha256**，
+  安装说明写一行链接过去：`https://github.com/o5-null/vs-framegen/blob/main/docs/install.md`。
+  以后所有 release 都链这一份，不逐版复述目录布局、参数表、推荐装法。
+- `docs\install.md` 的推荐顺序固定为：优先 **mpv-playkit-pre 懒人包**（含 `-pack-framegen` 补丁包），
+  自行搭建建议用 **K7 包**（K7sfunc 的 mpv 覆盖层）+ 本仓库 release 的 `vs-plugins` 附件。
+- 正文里不要再列"四引擎插件组"表、不要写版本主线总结、不要写 OSD 参数桥细节（后者归 K7sfunc）。
+- 构建产物（DLL、引擎包）不入库，只作为 release 附件分发。
+
 ## 邻近仓库（都在本目录下，各自独立 .git，已被 .gitignore 忽略）
 
 - .\k7sfunc：K7sfunc 的 fork（o5-null/K7sfunc），PLAYKIT 预设层与 RIFE_AJI 算子在这里；改动 push 后由 mpv-playkit 按 commit 钉版本
