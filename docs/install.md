@@ -12,27 +12,32 @@
 <https://github.com/o5-null/mpv-playkit-pre>
 
 解压即用的 Windows x64 便携 mpv（自带 Python、VapourSynth、K7sfunc 预设层），不写注册表、不打安装器。
-它只通过 GitHub Actions artifact 交付、不发 release，取最新的
-`mpv-playkit-pre-<版本>-windows-x64.zip` 解压即可。
+它只通过 GitHub Actions artifact 交付、不发 release，按档位各取一个**完整包**解压即可：
 
-帧生成插件 DLL 已经在基础包里；引擎（以及可选的推理档）是单独的补丁包，把同一个 artifact 列表里的
-`mpv-playkit-pre-<版本>-windows-x64-pack-vsdlssg.zip` 解压到**同一个根目录覆盖合并**（默认档，约 43 MB）：
+| 档位 | 包 | 用途 |
+|---|---|---|
+| 默认 | `mpv-playkit-pre-<版本>-windows-x64-vsdlssg.zip` | 播放 + 四个帧生成引擎（DLSS-G / XeSS-FG / VFG / FSR-FG），大多数机器选这个 |
+| 推理 | `mpv-playkit-pre-<版本>-windows-x64-vs-mlrt.zip` | 播放 + TensorRT-RTX 超分/去块/RIFE/DRBA（体积大，需 Turing+ 驱动）；**不带四个帧生成引擎运行时** |
+
+**不再需要叠加补丁包**：每个 zip 都是完整播放器，解压出来的目录结构一致：
 
 ```text
-mpv-playkit-pre-<版本>-windows-x64\
-  mpv.exe
-  portable_config\              ← K7sfunc 预设层、脚本
+mpv-playkit-pre-<版本>-windows-x64-vsdlssg\
+  mpv.exe                        ← 自维护构建（带 vf_playkit、vf vapoursynth）
+  portable_config\               ← K7sfunc 预设层、脚本
+  Lib\                           ← 嵌入式 Python + VapourSynth + 插件
   vs-plugins\
-    vdlssg.dll  vxessfg.dll  vvfg.dll  vfsr4.dll   ← 基础包自带，脚本首次使用时 LoadPlugin
-    dlss45\                     ← 来自 pack-vsdlssg：DLSS-G（6×）代理 + 运行库
-    xessfg\                     ← 来自 pack-vsdlssg：XeSS-FG（4×）
+    vdlssg.dll  vxessfg.dll  vvfg.dll  vfsr4.dll   ← 所有档位都带，脚本首次使用时 LoadPlugin
+    dlss45\  xessfg\  vfg\  fsr4\  ← 四颗帧生成引擎运行时（默认档）
 ```
 
-需要 TensorRT-RTX 超分/推理的，再叠 `-pack-vs-mlrt.zip`（~841 MB，装到
-`Lib\site-packages\vapoursynth\plugins\vsmlrt\`）。
+`vs-mlrt` 档在同样结构上多出 `Lib\site-packages\vapoursynth\plugins\vsmlrt\`
+（插件 + TensorRT-RTX 运行库 + 模型），但**不含**上面四颗帧生成引擎的运行时；
+要两者兼得，把默认档的 `vs-plugins\{dlss45,xessfg,vfg,fsr4}` 拷进 `vs-mlrt` 档即可。
+四个 DLL 所有档位都有。两档互斥：想换档就整个目录换掉。
 
 `Ctrl+Shift+p` / `Ctrl+Shift+o` 是 PLAYKIT 的超分/插帧预设开关（走 RIFE / RIFE_AJI），
-**不包含这四个帧生成引擎**。帧生成要在 mpv 里单独挂：基础包已经带 `portable_config\vs\MEMC_DLSSG_NV.vpy`
+**不包含这四个帧生成引擎**。帧生成要在 mpv 里单独挂：包里已经带 `portable_config\vs\MEMC_DLSSG_NV.vpy`
 这类脚本，加一条滤镜即可，例如
 
 ```ini
