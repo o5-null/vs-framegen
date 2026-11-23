@@ -36,7 +36,7 @@ src = core.std.Trim(src, 0, 23)   # 24 source frames -> 24*MULTI output frames
 out = core.vxessfg.FrameGen(
     src,
     multi=MULTI,
-    proxy_dir=os.path.join(PKG, "xessfg"),
+    proxy_dir=os.path.join(PKG, "bin", "xessfg"),
     log=1,
 )
 out.set_output()

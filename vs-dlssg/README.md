@@ -64,7 +64,7 @@ out = core.vdlssg.FrameGen(
     src,                     # RGBS 也接受（float32 RGB）
     multi=6,                 # 2..6，输出 multi 倍帧数、multi 倍帧率
     scene_threshold=0.25,    # 仅当上游没有 _SceneChange* 属性时才用；0 关闭内置检测
-    proxy_dir=r"E:\...\vs-dlssg\bin\dlss45",   # 可省略：默认 <DLL 目录>\bin\dlss45
+    proxy_dir=r"E:\...\vs-dlssg\bin\dlss45",   # 可省略：默认 <DLL 目录>\dlss45
 )
 out.set_output()
 ```

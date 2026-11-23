@@ -38,7 +38,7 @@ src = core.std.Trim(src, 90, 113)   # 24 source frames -> 24*MULTI output frames
 out = core.vvfg.FrameGen(
     src,
     multi=MULTI,
-    proxy_dir=os.path.join(PKG, "vfg"),
+    proxy_dir=os.path.join(PKG, "bin", "vfg"),
     log=1,
 )
 out.set_output()
