@@ -142,3 +142,40 @@ os.path.join(_here, os.pardir, os.pardir, "vs-plugins", "<dll>")
 - 菜单/键位仍按默认 2× 起手（`manifests/config.yml` 的标签已标注「VFG 2-6×」）。
 - 复测：`multi=4` → 三条 lane、`t=0.25/0.5/0.75`、`exit=0`；`VVFG_MULTI=3` → 两条 lane。
 
+
+## 附：反复重建滤镜为什么会崩（`vs-dlssg` commit `c99ff14`）
+
+现象：同一进程里把 `vapoursynth` 滤镜重建到第三次（`vf set` 换预设、`vf clr` + `vf set`、
+改 `user-data`、`loadfile` 重开都算），VFG 必崩 `0xC0000005`，Windows 事件日志里
+`出错模块名称： unknown`、`错误偏移： 0x0`。对照实验（`multitest10.lua`，三次同样的
+`vf set`）只有 VFG 复现，XeSS-FG / DLSSG / FSR4 反复重建都 `exit=0`。
+
+根因在 `vs-dlssg\src\vfg_session.cpp` 把 sm_89 当 sm_86 用的解锁钩子：
+
+- `patchIat()` 把 `nvVFXVideoFrameGeneration.dll` 导入表里 `cuDeviceGetAttribute` /
+  `cuModuleLoadData` 两个槽改写成本插件 DLL 里的 `hookGetAttr` / `hookLoadData`，
+  并把替换前的槽值存进 `g_realGetAttr` / `g_realLoad`；
+- 整套代码没有任何还原 IAT 或 `FreeLibrary` 的路径，而 vapoursynth 销毁环境时会卸载
+  插件 DLL —— 槽里就留下指向已卸载代码的指针；
+- 旧实现遇到“槽已经是自己的钩子”只 `hits++` 跳过（按“同基址重载”假设），
+  但此时 `g_real*` 已随旧映像一起丢失（静态变量归零），`hits` 仍大于 0 让
+  `NvVfxApi::open()` 判定成功，首次调用就空指针跳转。
+
+修复两处：`patchIat()` 开头 `pinPluginImage()` 用
+`GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_PIN, …)` 把本映像钉在进程里；
+真函数一律 `GetProcAddress(nvcuda.dll, …)` 重新解析，不再信任导入表槽原值。
+复测四项全部 `exit=0`：三次重建、2×→3×→4×→清空热改、DLSSG→VFG 换引擎、`loadfile` 重开。
+
+## 附：通用倍数菜单（`k7sfunc` `78bc8b0`、`mpv-playkit` `d0ca253`）
+
+`VF 滤镜 > 倍数` 对所有会读 `user-data` 的插帧预设生效：
+
+- 脚本 `k7sfunc\mpv\portable_config\scripts\k7f_multi.lua`，状态存
+  `~~/_cache/k7f_multi.json`（`{ "multi": N }`，删除即“跟随预设”）；
+- 菜单项命令 `script-message-to k7f_multi set N` / `clear`；
+- 改倍数只重写当前链上的 `user-data=multi=N`（`playkit` 滤镜写 `multi=N`），
+  并观察 `vf` 变化，给之后套用的预设自动补值；上限表 DLSSG/VFG 6、XeSS-FG 2、FSR4 2；
+- 实测：默认 2× → 点 4× → sidecar `multi=4`/240 时间轴、状态文件落盘；
+  点“跟随预设”→ 回落 2×、状态文件删除；重启后带着 `{ "multi": 4 }` 直接套预设即为 4×。
+- `menu.conf` 里带命令的条目不能当父菜单（否则 select.lua 报
+  `has leading whitespace but no parent menu was defined`），所以六个倍数项都在一级。
