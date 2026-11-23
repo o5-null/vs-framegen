@@ -54,34 +54,29 @@ K7 包指 K7sfunc 的 `mpv\portable_config` 覆盖层（`vs\` 下的 `MEMC_*.vpy
 
 ### 引擎包位置
 
-发行包把引擎包放在 `vs-plugins\bin\<引擎>\`（与 0.1.0、mpv-playkit 的补丁包一致），K7 脚本
-`MEMC_*.vpy` 会按 `vs-plugins\bin\<引擎>` → `vs-plugins\<引擎>` 的顺序找，并把绝对路径传给插件：
+引擎包与 DLL 放在同一层（`vs-plugins\<引擎>\`），插件默认就按 `<DLL 所在目录>\dlss45` 找，
+手动 `LoadPlugin` 不用写 `proxy_dir`：
 
 ```text
 <mpv 根目录>\vs-plugins\
   vdlssg.dll
-  bin\dlss45\version.dll        ← 发行包位置
-  bin\dlss45\dlssg_sm86.ini
-  bin\dlss45\dlssg_sm86\runtime\nvngx_dlssg.dll
-  bin\dlss45\dlssg_sm86\kernels\fg_kernels.dll
+  dlss45\version.dll             ← 与 DLL 同级
+  dlss45\dlssg_sm86.ini
+  dlss45\dlssg_sm86\runtime\nvngx_dlssg.dll
+  dlss45\dlssg_sm86\kernels\fg_kernels.dll
 ```
 
-只有插件自己找的时候（手动 `LoadPlugin`，不带 `proxy_dir`），才会按 `<DLL 所在目录>\dlss45` 这种
-**与 DLL 同级**的位置找。两种都行，选一种即可：
-
-- 用 K7 脚本：保持 `vs-plugins\bin\dlss45`，脚本会传绝对路径；
-- 自己写 vpy：把包放在 DLL 同级（`vs-plugins\dlss45`），或者显式给 `proxy_dir=r"D:\mpv\vs-plugins\bin\dlss45"`。
-
-不要出现 `vs-plugins\bin\dlss45\bin` 这种多套一层的情况。0.1.0 的说明里 "插件只找与 DLL 同级的
-dlss45" 那句话只对手动调用成立，发行包一直用的是 `bin\` 层。
+K7 的 `MEMC_*.vpy` 为了兼容会先试 `vs-plugins\bin\<引擎>` 再试同级，命中哪个就把绝对路径传给插件。
+所以把引擎包多套一层 `bin\` 也能用，但不是发行包的布局；不要把两种混着放，更不要出现
+`vs-plugins\bin\dlss45\bin` 这种双 `bin`。
 
 ## 3. release 附件
 
 | 文件 | 内容 |
 |---|---|
-| `vs-framegen-<版本>-mpv-lazy.zip` | 全量：四个插件 DLL + `bin\dlss45` + `bin\xessfg` |
-| `engine-dlss45-mpv-lazy.zip` | 只要 DLSS-G：`vs-plugins\bin\dlss45\` |
-| `engine-xessfg-mpv-lazy.zip` | 只要 XeSS-FG：`vs-plugins\bin\xessfg\` |
+| `vs-framegen-<版本>-mpv-lazy.zip` | 全量：四个插件 DLL + `dlss45` + `xessfg`（都与 DLL 同级） |
+| `engine-dlss45-mpv-lazy.zip` | 只要 DLSS-G：`vs-plugins\dlss45\` |
+| `engine-xessfg-mpv-lazy.zip` | 只要 XeSS-FG：`vs-plugins\xessfg\` |
 
 每个 release 正文里附 sha256。覆盖安装会保留你自己的 `portable_config`，只动 `vs-plugins\`。
 
