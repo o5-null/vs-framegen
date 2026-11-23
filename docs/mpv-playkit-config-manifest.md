@@ -137,6 +137,14 @@ CI（`.github/workflows/build.yml`）的流程是 `fetch → assemble → smoke 
   （`pk_abs_path` / `pk_exe_relative_exists`）：NGX 只认绝对路径，而工作目录会被快捷方式、
   文件关联改掉，便携包从别处启动时原来找不到 `vs-plugins/vdlssg.dll`。
 
+- 右键菜单的入口是 `input_uosc.conf` 的鼠标绑定（`menu.conf` 自己不绑键）：上游默认
+  `MBTN_RIGHT → script-binding uosc/menu`（uosc 自带的固定菜单，不读 `menu.conf`）、
+  `Ctrl+MBTN_RIGHT → context-menu`。本包把两者**对调**：右键打开 `menu.conf` 菜单
+  （插帧预设 / 倍数 / 原生滤镜），Ctrl+右键打开 uosc 菜单。uosc 的功能没有损失——
+  `menu.conf` 第一项就是 `显示uosc菜单`（`script-binding uosc/menu`）。
+  `menu.conf` → `menu-data` 的解析由 mpv 内置 `select.lua` 完成（见
+  `mpv-src/DOCS/man/context_menu.rst`），Windows 上由 `context-menu` 弹原生菜单。
+
 ### 实测（这次是真跑了，不是只看结构）
 
 - 菜单：在 stage 里用 `--config-dir` 指到生成的配置跑 `menu-data` 转储，`items=27`、
