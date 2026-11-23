@@ -104,8 +104,7 @@ os.path.join(_here, os.pardir, os.pardir, "vs-plugins", "<dll>")
 - 零拷贝（`vf=playkit`）跨显卡共享句柄的根因已定位在
   `vs-dlssg\src\bridge.cpp`（丢弃 D3D11 LUID），本轮不处理，见
   `docs\mpv-playkit-bridge-probe.md`。
-- VFG 的倍数（见下）：脚本注释写的「固定 2×」不成立，但要不要在包里开放 3×~6× 尚未
-  决定。
+- VFG 的倍数（见下）：脚本注释写的「固定 2×」不成立，现已开放 2~6×。
 
 ## 附：VFG 的倍数到底是多少
 
@@ -130,3 +129,16 @@ os.path.join(_here, os.pardir, os.pardir, "vs-plugins", "<dll>")
 
 真正的限制是显存和吞吐：lane 数与倍数同增（1080p 每条约 1.5 GB），真实输出帧率随倍数
 下降（2× ≈32 fps、6× ≈7 fps，见上表）。
+
+### 现在怎么改倍数（`vs-dlssg` commit `4d5a70c`、`k7sfunc` commit `f85f808`）
+
+`MEMC_VFG_NV.vpy` 已改成 2~6 可调，默认仍是 2×：
+
+- 环境变量：`set VVFG_MULTI=4`（夹在 2..6）；
+- 滤镜参数：`vf set @VVFG:vapoursynth="~~/vs/MEMC_VFG_NV.vpy":user-data="multi=4"`
+  ——`user-data` 的值必须整段带引号，mpv 的 `split_subconf`
+  （`mpv-src\options\m_option.c:2138-2156`）把 `=`/`:` 当分隔符，写成
+  `user-data=multi=4`（无引号）会被截成 `multi`，插件仍按 2× 跑。
+- 菜单/键位仍按默认 2× 起手（`manifests/config.yml` 的标签已标注「VFG 2-6×」）。
+- 复测：`multi=4` → 三条 lane、`t=0.25/0.5/0.75`、`exit=0`；`VVFG_MULTI=3` → 两条 lane。
+
