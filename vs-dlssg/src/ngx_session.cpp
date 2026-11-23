@@ -7,6 +7,7 @@
 #include "ngx_session.h"
 
 #include "d3d12_ctx.h"
+#include "nvof_motion.h"
 #include "yuv.h"
 
 using fg::YuvCoefficients;
@@ -15,10 +16,13 @@ using fg::YuvRowWriter;
 using fg::yuvCoefficients;
 using fg::yuvQuant;
 using fg::yuvRowToRgb;
+using fg::yuvStoreSample;
+using fg::yuvWriteClamp;
 
 #include <Windows.h>
 #include <d3d12.h>
 #include <dxgi1_6.h>
+#include <emmintrin.h>
 #include <wrl/client.h>
 
 #include <nvsdk_ngx.h>
@@ -27,10 +31,16 @@ using fg::yuvRowToRgb;
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
+#include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
+#include <functional>
+#include <iterator>
 #include <mutex>
 #include <thread>
 #include <vector>
@@ -106,6 +116,164 @@ bool loadProxy(const std::wstring& proxyDir, HMODULE& module, std::string& error
   }
   return true;
 }
+
+// DLSS-G's model preset is not an NGX parameter: the sm86 proxy reads it from the engine pack's own
+// dlssg_sm86.ini while it installs and pins it for the rest of the process, so the only moment to
+// choose one is before version.dll is loaded. Two are offered (see Config::preset); B is refused in
+// frame_gen.cpp because it needs inputs this plugin cannot supply.
+constexpr int kPresetA = 1;
+constexpr int kPresetC = 3;
+
+std::string narrowPath(const std::wstring& wide) {
+  const int need = WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), int(wide.size()), nullptr, 0,
+                                       nullptr, nullptr);
+  std::string out(size_t(need > 0 ? need : 0), '\0');
+  if (need > 0) {
+    WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), int(wide.size()), &out[0], need, nullptr, nullptr);
+  }
+  return out;
+}
+
+const char* presetName(int preset) {
+  return preset == kPresetA ? "a" : preset == kPresetC ? "c" : preset == 2 ? "b" : "unknown";
+}
+
+bool equalsIgnoreCase(const std::string& text, size_t begin, size_t end, const char* word) {
+  const size_t len = std::strlen(word);
+  if (end - begin != len) return false;
+  for (size_t i = 0; i < len; ++i) {
+    const char c = char(std::tolower(static_cast<unsigned char>(text[begin + i])));
+    const char w = char(std::tolower(static_cast<unsigned char>(word[i])));
+    if (c != w) return false;
+  }
+  return true;
+}
+
+// Finds the Preset value inside the INI's [DLSSG] section, at byte level, so every other byte of the
+// file is preserved. Returns a/b/c as 1/2/3, 0 for anything this build does not know; `found` says
+// whether the key exists at all and the value bytes are reported for the rewrite.
+int readPresetValue(const std::string& text, bool* found, size_t* valueBegin, size_t* valueEnd) {
+  if (found) *found = false;
+  bool inDlssg = false;
+  size_t lineStart = 0;
+  while (lineStart < text.size()) {
+    size_t lineEnd = text.find('\n', lineStart);
+    if (lineEnd == std::string::npos) lineEnd = text.size();
+    size_t bodyEnd = lineEnd;
+    if (bodyEnd > lineStart && text[bodyEnd - 1] == '\r') --bodyEnd;
+    size_t first = lineStart;
+    while (first < bodyEnd && (text[first] == ' ' || text[first] == '\t')) ++first;
+
+    if (first < bodyEnd && text[first] == '[') {
+      const size_t close = text.find(']', first);
+      const size_t headerEnd = close == std::string::npos || close >= bodyEnd ? bodyEnd : close + 1;
+      inDlssg = equalsIgnoreCase(text, first, headerEnd, "[DLSSG]");
+    } else if (inDlssg && first < bodyEnd) {
+      const size_t eq = text.find('=', first);
+      if (eq != std::string::npos && eq < bodyEnd) {
+        size_t keyEnd = eq;
+        while (keyEnd > first && (text[keyEnd - 1] == ' ' || text[keyEnd - 1] == '\t')) --keyEnd;
+        if (equalsIgnoreCase(text, first, keyEnd, "Preset")) {
+          size_t valueAt = eq + 1;
+          while (valueAt < bodyEnd && (text[valueAt] == ' ' || text[valueAt] == '\t')) ++valueAt;
+          size_t valueTo = bodyEnd;
+          while (valueTo > valueAt && (text[valueTo - 1] == ' ' || text[valueTo - 1] == '\t')) --valueTo;
+          if (found) *found = true;
+          if (valueBegin) *valueBegin = valueAt;
+          if (valueEnd) *valueEnd = valueTo;
+          if (valueTo - valueAt != 1) return 0;
+          const char letter = char(std::tolower(static_cast<unsigned char>(text[valueAt])));
+          return letter == 'a' ? kPresetA : letter == 'b' ? 2 : letter == 'c' ? kPresetC : 0;
+        }
+      }
+    }
+    if (lineEnd == text.size()) break;
+    lineStart = lineEnd + 1;
+  }
+  return 0;
+}
+
+// Sets [DLSSG] Preset to `requested` (kPresetA or kPresetC) in <proxyDir>\dlssg_sm86.ini, rewriting
+// only that value. `requested` == 0 leaves the file alone and just reports what it holds. Returns the
+// preset the file ends up with (0 when unset), and sets `error` only when a requested preset cannot
+// be honoured.
+int applyPreset(const std::wstring& proxyDir, int requested, std::string& error) {
+  const std::wstring path = proxyDir + L"\\dlssg_sm86.ini";
+  std::ifstream file(path, std::ios::binary);
+  if (!file) {
+    // No pack at all: loadProxy() has the better message for that, so stay quiet unless asked.
+    if (requested != 0) {
+      error = std::string("preset ") + presetName(requested) + ": no dlssg_sm86.ini in " +
+              narrowPath(proxyDir);
+    }
+    return 0;
+  }
+  std::string text((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+  file.close();
+
+  bool found = false;
+  size_t valueBegin = 0;
+  size_t valueEnd = 0;
+  const int current = readPresetValue(text, &found, &valueBegin, &valueEnd);
+  if (!found) {
+    if (requested != 0) {
+      error = std::string("preset ") + presetName(requested) + ": " + narrowPath(path) +
+              " has no [DLSSG] Preset key (only the DLSS 4.5 engine pack has one)";
+    }
+    return 0;
+  }
+  if (requested == 0 || requested == current) return current;
+
+  // Write beside the file and swap it in, so a crash mid-write cannot leave a truncated pack INI.
+  text.replace(valueBegin, valueEnd - valueBegin, 1, requested == kPresetA ? 'A' : 'C');
+  const std::wstring temp = path + L".tmp";
+  {
+    std::ofstream out(temp, std::ios::binary | std::ios::trunc);
+    if (out) out.write(text.data(), std::streamsize(text.size()));
+    out.close();
+    if (!out) {
+      const unsigned long code = static_cast<unsigned long>(GetLastError());
+      DeleteFileW(temp.c_str());
+      error = std::string("preset ") + presetName(requested) + ": cannot write " + narrowPath(path) +
+              " (error " + std::to_string(code) + ")";
+      return current;
+    }
+  }
+  if (!MoveFileExW(temp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+    const unsigned long code = static_cast<unsigned long>(GetLastError());
+    DeleteFileW(temp.c_str());
+    error = std::string("preset ") + presetName(requested) + ": cannot replace " + narrowPath(path) +
+            " (error " + std::to_string(code) + ")";
+    return current;
+  }
+  return requested;
+}
+
+// Holding this across the INI patch and the proxy's install keeps two processes from reading each
+// other's value: the preset is per process, the INI is per pack.
+struct PresetLock {
+  HANDLE handle = nullptr;
+  ~PresetLock() {
+    if (!handle) return;
+    ReleaseMutex(handle);
+    CloseHandle(handle);
+  }
+  bool acquire(std::string& error) {
+    handle = CreateMutexW(nullptr, FALSE, L"Local\\vs-dlssg-preset-ini");
+    if (!handle) {
+      error = "CreateMutexW failed while pinning the DLSS-G preset";
+      return false;
+    }
+    const DWORD wait = WaitForSingleObject(handle, 120000);
+    if (wait != WAIT_OBJECT_0 && wait != WAIT_ABANDONED) {
+      CloseHandle(handle);
+      handle = nullptr;
+      error = "timed out waiting for another process to pin its DLSS-G preset";
+      return false;
+    }
+    return true;
+  }
+};
 
 bool pickAdapter(int index, ComPtr<IDXGIAdapter1>& adapter, std::string& error) {
   ComPtr<IDXGIFactory2> factory;
@@ -584,31 +752,173 @@ void buildEvalOptions(NVSDK_NGX_DLSSG_Opt_Eval_Params& o, uint32_t width, uint32
   o.reset = reset;
 }
 
-// Splits [0, height) over the cores. The float/half work below is pure memory shuffling and one
-// thread only sustains about 1 GB/s of it, which made these copies cost roughly twenty times what
-// the DLSS-G evaluation costs (200 ms against 8 ms for a generated 2160p frame).
+// Row-parallel helper for the float/half shuffling. One thread only sustains about 1 GB/s of this
+// work, so the copies used to cost roughly twenty times what the DLSS-G evaluation costs (200 ms
+// against 8 ms for a generated 2160p frame). Creating fifteen threads for every upload and every
+// readback then added its own few milliseconds, which matters most on short 1080p frames, so the
+// workers are started once and kept waiting for a band list.
+class RowPool {
+ public:
+  static RowPool& get() {
+    static RowPool pool;
+    return pool;
+  }
+
+  template <typename Fn>
+  void run(uint32_t height, Fn fn) {
+    unsigned cores = std::thread::hardware_concurrency();
+    if (cores == 0) cores = 4;
+    const uint32_t threads = std::min<uint32_t>(cores, 16);
+    const uint32_t band = (height + threads - 1) / threads;
+    if (threads <= 1 || band < 16) {
+      fn(0u, height);
+      return;
+    }
+    const uint32_t bands = (height + band - 1) / band;
+    {
+      std::lock_guard<std::mutex> lk(m_);
+      // The workers copy this std::function, but they only call it while the caller is still
+      // inside run(): the caller waits for remaining_ == 0 before returning.
+      fn_ = [&fn](uint32_t begin, uint32_t end) { fn(begin, end); };
+      band_ = band;
+      height_ = height;
+      bands_ = bands;
+      next_ = 0;
+      remaining_ = bands;
+      ++gen_;
+    }
+    cv_.notify_all();
+
+    // The caller is one of the workers; leaving one core idle costs more than it saves here.
+    for (;;) {
+      uint32_t b = 0;
+      {
+        std::lock_guard<std::mutex> lk(m_);
+        if (next_ >= bands_) break;
+        b = next_++;
+      }
+      const uint32_t begin = b * band;
+      // No std::min here: windows.h defines a min macro unless NOMINMAX is set.
+      const uint32_t end = (begin + band < height) ? begin + band : height;
+      fn(begin, end);
+      std::lock_guard<std::mutex> lk(m_);
+      if (--remaining_ == 0) done_.notify_all();
+    }
+    std::unique_lock<std::mutex> lk(m_);
+    done_.wait(lk, [&] { return remaining_ == 0; });
+  }
+
+ private:
+  RowPool() {
+    unsigned cores = std::thread::hardware_concurrency();
+    if (cores == 0) cores = 4;
+    // No std::min: windows.h defines a min macro that would eat the call.
+    if (cores > 16u) cores = 16u;
+    for (unsigned i = 1; i < cores; ++i) workers_.emplace_back([this] { worker(); });
+  }
+
+  ~RowPool() {
+    {
+      std::lock_guard<std::mutex> lk(m_);
+      stop_ = true;
+    }
+    cv_.notify_all();
+    for (auto& worker : workers_) worker.join();
+  }
+
+  void worker() {
+    uint64_t seen = 0;
+    for (;;) {
+      uint32_t band = 0, bands = 0, height = 0;
+      {
+        std::unique_lock<std::mutex> lk(m_);
+        cv_.wait(lk, [&] { return stop_ || gen_ != seen; });
+        if (stop_) return;
+        seen = gen_;
+        band = band_;
+        bands = bands_;
+        height = height_;
+      }
+      for (;;) {
+        uint32_t b = 0;
+        {
+          std::lock_guard<std::mutex> lk(m_);
+          // A worker that missed the start of a newer job must not consume its bands with the
+          // previous job's function.
+          if (gen_ != seen || next_ >= bands) break;
+          b = next_++;
+        }
+        const uint32_t begin = b * band;
+        const uint32_t end = (begin + band < height) ? begin + band : height;
+        fn_(begin, end);
+        std::lock_guard<std::mutex> lk(m_);
+        if (--remaining_ == 0) done_.notify_all();
+      }
+    }
+  }
+
+  std::vector<std::thread> workers_;
+  std::mutex m_;
+  std::condition_variable cv_;
+  std::condition_variable done_;
+  std::function<void(uint32_t, uint32_t)> fn_;
+  uint32_t band_ = 0, height_ = 0, bands_ = 0, next_ = 0, remaining_ = 0;
+  uint64_t gen_ = 0;
+  bool stop_ = false;
+};
+
 template <typename Fn>
 void parallelRows(uint32_t height, Fn fn) {
-  unsigned cores = std::thread::hardware_concurrency();
-  if (cores == 0) cores = 4;
-  const uint32_t threads = std::min<uint32_t>(cores, 16);
-  const uint32_t band = (height + threads - 1) / threads;
-  if (threads <= 1 || band < 16) {
-    fn(0u, height);
-    return;
+  RowPool::get().run(height, fn);
+}
+
+// Two RGBA half pixels (one 16-byte load) -> r0 g0 b0 a0 r1 g1 b1 a1. The half conversion is the
+// expensive part; doing two pixels at once halves it on the 4:2:0 path.
+inline void loadRgba2(const uint16_t* src, float out[8]) {
+#if defined(_M_AVX2) || defined(__AVX2__)
+  _mm256_storeu_ps(out, half8ToFloat8(src));
+#else
+  for (int i = 0; i < 8; ++i) out[i] = halfToFloatFast(src[i]);
+#endif
+}
+
+// Four RGBA half pixels (one 32-byte load) -> planar float. The stack array is L1-resident and lets
+// the compiler turn the channel picks into cheap moves.
+inline void unpackRgba4(const uint16_t* src, float* r, float* g, float* b) {
+  float t[16];
+#if defined(_M_AVX2) || defined(__AVX2__)
+  const __m256i h = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(src));
+  _mm256_storeu_ps(t, _mm256_cvtph_ps(_mm256_castsi256_si128(h)));
+  _mm256_storeu_ps(t + 8, _mm256_cvtph_ps(_mm256_extracti128_si256(h, 1)));
+#else
+  for (int i = 0; i < 16; ++i) t[i] = halfToFloatFast(src[i]);
+#endif
+  for (int i = 0; i < 4; ++i) {
+    r[i] = t[i * 4 + 0];
+    g[i] = t[i * 4 + 1];
+    b[i] = t[i * 4 + 2];
   }
-  std::vector<std::thread> pool;
-  pool.reserve(threads - 1);
-  for (uint32_t t = 1; t < threads; ++t) {
-    const uint32_t begin = t * band;
-    if (begin >= height) break;
-    // No std::min here: windows.h defines a min macro unless NOMINMAX is set.
-    const uint32_t end = (begin + band < height) ? begin + band : height;
-    pool.emplace_back([&fn, begin, end] { fn(begin, end); });
+}
+
+// Planar float -> four RGBA half pixels (A = 1).
+inline void packRgba4(const float* r, const float* g, const float* b, uint16_t* dst) {
+  float t[16];
+  for (int i = 0; i < 4; ++i) {
+    t[i * 4 + 0] = r[i];
+    t[i * 4 + 1] = g[i];
+    t[i * 4 + 2] = b[i];
+    t[i * 4 + 3] = 1.0f;
   }
-  const uint32_t firstEnd = (band < height) ? band : height;
-  fn(0u, firstEnd);
-  for (auto& worker : pool) worker.join();
+#if defined(_M_AVX2) || defined(__AVX2__)
+  const __m128i h0 =
+      _mm256_cvtps_ph(_mm256_loadu_ps(t), _MM_FROUND_TO_NEAREST_INT);
+  const __m128i h1 =
+      _mm256_cvtps_ph(_mm256_loadu_ps(t + 8), _MM_FROUND_TO_NEAREST_INT);
+  _mm_storeu_si128(reinterpret_cast<__m128i*>(dst), h0);
+  _mm_storeu_si128(reinterpret_cast<__m128i*>(dst + 8), h1);
+#else
+  for (int i = 0; i < 16; ++i) dst[i] = floatToHalfFast(t[i]);
+#endif
 }
 
 // RGBS planes, or planar YUV converted on the way, -> the colour upload buffer (A = 1). Rows go
@@ -650,7 +960,9 @@ bool uploadColor(Gpu& gpu, const PlaneView& frame, uint32_t width, uint32_t heig
         continue;
       }
       auto* dst = reinterpret_cast<uint16_t*>(base + size_t(y) * pitch);
-      for (uint32_t x = 0; x < width; ++x) {
+      uint32_t x = 0;
+      for (; x + 4 <= width; x += 4) packRgba4(r + x, g + x, b + x, dst + size_t(x) * 4);
+      for (; x < width; ++x) {
         dst[size_t(x) * 4 + 0] = floatToHalfFast(r[x]);
         dst[size_t(x) * 4 + 1] = floatToHalfFast(g[x]);
         dst[size_t(x) * 4 + 2] = floatToHalfFast(b[x]);
@@ -662,11 +974,163 @@ bool uploadColor(Gpu& gpu, const PlaneView& frame, uint32_t width, uint32_t heig
   return true;
 }
 
+// 8-bit packed values are stored at full 8-bit precision; the output frame may still be 10-bit or
+// wider. Replicate the high bits (255 -> 1023/4095/65535) so a forced-8-bit transfer does not also
+// darken the image by leaving the low bits at zero.
+inline uint16_t expand8To(uint32_t v, int bits) {
+  switch (bits) {
+    case 8: return uint16_t(v);
+    case 10: return uint16_t((v << 2) | (v >> 6));
+    case 12: return uint16_t((v << 4) | (v >> 4));
+    case 16: return uint16_t((v << 8) | v);
+    default: return uint16_t((v * 65535u + 127u) / 255u);
+  }
+}
+
+// Expand a row of packed 8-bit luma samples to 16-bit lanes. The row is contiguous bytes, so
+// SSE2 can widen eight samples per step; the scalar tail handles the last <8 pixels.
+inline void expand8RowTo16(const uint8_t* src, uint16_t* dst, uint32_t count, int bits) {
+  const __m128i zero = _mm_setzero_si128();
+  uint32_t x = 0;
+  if (bits == 16) {
+    for (; x + 8 <= count; x += 8) {
+      __m128i v = _mm_unpacklo_epi8(
+          _mm_loadl_epi64(reinterpret_cast<const __m128i*>(src + x)), zero);
+      v = _mm_or_si128(v, _mm_slli_epi16(v, 8));
+      _mm_storeu_si128(reinterpret_cast<__m128i*>(dst + x), v);
+    }
+  } else if (bits != 8) {
+    const int left = bits - 8;   // 10 -> 2, 12 -> 4
+    const int right = 8 - left;  // replicate the high bits into the new low bits
+    for (; x + 8 <= count; x += 8) {
+      __m128i v = _mm_unpacklo_epi8(
+          _mm_loadl_epi64(reinterpret_cast<const __m128i*>(src + x)), zero);
+      v = _mm_or_si128(_mm_slli_epi16(v, left), _mm_srli_epi16(v, right));
+      _mm_storeu_si128(reinterpret_cast<__m128i*>(dst + x), v);
+    }
+  }
+  for (; x < count; ++x) dst[x] = expand8To(src[x], bits);
+}
+
+// 10-bit packed values need the same expansion when the output is 12/16-bit.
+inline uint16_t expand10To(uint32_t v, int bits) {
+  v &= 0x3ffu;
+  switch (bits) {
+    case 8: return uint16_t((v * 255u + 511u) / 1023u);
+    case 10: return uint16_t(v);
+    case 12: return uint16_t((v << 2) | (v >> 8));
+    case 16: return uint16_t((v << 6) | (v >> 4));
+    default: return uint16_t((v * 65535u + 511u) / 1023u);
+  }
+}
+
 // The colour texture the engine wrote -> the caller's planes. RGBS comes back unchanged; a YUV
 // caller gets planar YUV, with chroma as a box average of the subW x subH block (what an encoder
 // does, and what keeps a flat area neutral).
 bool readbackColor(Gpu& gpu, const PlaneSink& out, uint32_t width, uint32_t height,
                    const ColorFormat& format, std::string& error) {
+  // DLSS-G only: the engine's RGBA16F was already converted to packed planar 4:2:0 on the GPU, so
+  // the PCIe transfer is 3.1 MB (8-bit) or 6.2 MB (10-bit) instead of 16.6 MB. The host only
+  // unpacks the words and, when the output is wider than the packed depth, expands the samples.
+  if (gpu.yuv420Enabled() && format.isYuv() &&
+      gpu.colorFormat() == DXGI_FORMAT_R16G16B16A16_FLOAT) {
+    const uint8_t* packed = gpu.mapYuvReadback(error);
+    if (!packed) return false;
+    const auto* ysrc = reinterpret_cast<const uint32_t*>(packed);
+    const uint32_t chromaWidth = width / 2;
+    const uint32_t chromaHeight = height / 2;
+    const int bytes = format.bytesPerSample();
+    const int outBits = format.bits;
+
+    if (gpu.yuvBits() == 8) {
+      // Four luma samples per uint, and two chroma pairs (U0|V0<<8|U1<<16|V1<<24) per uint.
+      const uint32_t yWords = width / 4;
+      const auto* uvs = ysrc + size_t(width) * height / 4;
+      if (bytes == 1) {
+        for (uint32_t y = 0; y < height; ++y) {
+          std::memcpy(out.data[0] + size_t(y) * out.stride[0], ysrc + size_t(y) * yWords, width);
+        }
+      } else {
+        for (uint32_t y = 0; y < height; ++y) {
+          auto* row = reinterpret_cast<uint16_t*>(out.data[0] + size_t(y) * out.stride[0]);
+          expand8RowTo16(reinterpret_cast<const uint8_t*>(ysrc + size_t(y) * yWords), row,
+                         width, outBits);
+        }
+      }
+      // A 256-entry table keeps the chroma deinterleave cheap when the output is wider than 8 bit.
+      uint16_t lut8[256];
+      if (bytes != 1) {
+        for (int i = 0; i < 256; ++i) lut8[i] = expand8To(uint32_t(i), outBits);
+      }
+      const uint32_t uvWords = chromaWidth / 2;
+      for (uint32_t cy = 0; cy < chromaHeight; ++cy) {
+        uint8_t* uRow = out.data[1] + size_t(cy) * out.stride[1];
+        uint8_t* vRow = out.data[2] + size_t(cy) * out.stride[2];
+        const uint32_t* src = uvs + size_t(cy) * uvWords;
+        for (uint32_t cx = 0; cx < uvWords; ++cx) {
+          const uint32_t v = src[cx];
+          const uint32_t u0 = v & 0xffu, v0 = (v >> 8) & 0xffu;
+          const uint32_t u1 = (v >> 16) & 0xffu, v1 = (v >> 24) & 0xffu;
+          if (bytes == 1) {
+            uRow[2 * cx + 0] = uint8_t(u0);
+            uRow[2 * cx + 1] = uint8_t(u1);
+            vRow[2 * cx + 0] = uint8_t(v0);
+            vRow[2 * cx + 1] = uint8_t(v1);
+          } else {
+            auto* u16 = reinterpret_cast<uint16_t*>(uRow);
+            auto* v16 = reinterpret_cast<uint16_t*>(vRow);
+            u16[2 * cx + 0] = lut8[u0];
+            u16[2 * cx + 1] = lut8[u1];
+            v16[2 * cx + 0] = lut8[v0];
+            v16[2 * cx + 1] = lut8[v1];
+          }
+        }
+      }
+    } else {
+      // 10-bit: one luma sample per 16-bit lane, one chroma sample per uint (U low, V high).
+      const auto* uvs = ysrc + size_t(width) * height / 2;
+      if (bytes == 2 && outBits == 10) {
+        for (uint32_t y = 0; y < height; ++y) {
+          std::memcpy(out.data[0] + size_t(y) * out.stride[0], ysrc + size_t(y) * (width / 2),
+                      size_t(width) * 2);
+        }
+      } else {
+        for (uint32_t y = 0; y < height; ++y) {
+          uint8_t* row = out.data[0] + size_t(y) * out.stride[0];
+          const uint32_t* src = ysrc + size_t(y) * (width / 2);
+          for (uint32_t x = 0; x < width; ++x) {
+            const uint32_t v = (src[x >> 1] >> ((x & 1u) * 16)) & 0xffffu;
+            if (bytes == 1) {
+              row[x] = uint8_t(expand10To(v, 8));
+            } else {
+              reinterpret_cast<uint16_t*>(row)[x] = expand10To(v, outBits);
+            }
+          }
+        }
+      }
+      for (uint32_t cy = 0; cy < chromaHeight; ++cy) {
+        uint8_t* uRow = out.data[1] + size_t(cy) * out.stride[1];
+        uint8_t* vRow = out.data[2] + size_t(cy) * out.stride[2];
+        const uint32_t* src = uvs + size_t(cy) * chromaWidth;
+        for (uint32_t cx = 0; cx < chromaWidth; ++cx) {
+          const uint32_t v = src[cx];
+          const uint32_t u = v & 0xffffu, w = (v >> 16) & 0xffffu;
+          if (bytes == 1) {
+            uRow[cx] = uint8_t(expand10To(u, 8));
+            vRow[cx] = uint8_t(expand10To(w, 8));
+          } else {
+            auto* u16 = reinterpret_cast<uint16_t*>(uRow);
+            auto* v16 = reinterpret_cast<uint16_t*>(vRow);
+            u16[cx] = expand10To(u, outBits);
+            v16[cx] = expand10To(w, outBits);
+          }
+        }
+      }
+    }
+    gpu.unmapYuvReadback();
+    return true;
+  }
+
   const uint8_t* raw = gpu.mapReadback(error);
   if (!raw) return false;
   const size_t pitch = size_t(gpu.colorRowPitch());
@@ -684,7 +1148,9 @@ bool readbackColor(Gpu& gpu, const PlaneSink& out, uint32_t width, uint32_t heig
       return;
     }
     const auto* src = reinterpret_cast<const uint16_t*>(raw + size_t(y) * pitch);
-    for (uint32_t x = 0; x < width; ++x) {
+    uint32_t x = 0;
+    for (; x + 4 <= width; x += 4) unpackRgba4(src + size_t(x) * 4, r + x, g + x, b + x);
+    for (; x < width; ++x) {
       r[x] = halfToFloatFast(src[size_t(x) * 4 + 0]);
       g[x] = halfToFloatFast(src[size_t(x) * 4 + 1]);
       b[x] = halfToFloatFast(src[size_t(x) * 4 + 2]);
@@ -703,25 +1169,95 @@ bool readbackColor(Gpu& gpu, const PlaneSink& out, uint32_t width, uint32_t heig
     return true;
   }
 
-  YuvRowWriter writer;
-  writer.bind(out, format, int(width), int(height));
-  const int subH = format.subH;
-  parallelRows(uint32_t(writer.chromaRows()), [&](uint32_t c0, uint32_t c1) {
-    std::vector<float> rgb(size_t(width) * 3 * size_t(subH));
-    const float* rows[6] = {};
-    for (uint32_t cy = c0; cy < c1; ++cy) {
-      int count = 0;
-      for (int dy = 0; dy < subH; ++dy) {
-        const int y = int(cy) * subH + dy;
-        if (y >= int(height)) break;
-        float* r = rgb.data() + size_t(count) * 3 * size_t(width);
-        unpackRow(y, r, r + width, r + size_t(width) * 2);
-        rows[count * 3 + 0] = r;
-        rows[count * 3 + 1] = r + width;
-        rows[count * 3 + 2] = r + size_t(width) * 2;
-        ++count;
+  // XeSS writes packed 10-bit colour, where the fused half path below does not apply. Keep the
+  // row-buffer writer for that (rare) case; DLSS-G always lands in RGBA16F.
+  if (tenBit) {
+    YuvRowWriter writer;
+    writer.bind(out, format, int(width), int(height));
+    const int subH = format.subH;
+    parallelRows(uint32_t(writer.chromaRows()), [&](uint32_t c0, uint32_t c1) {
+      std::vector<float> rgb(size_t(width) * 3 * size_t(subH));
+      const float* rows[6] = {};
+      for (uint32_t cy = c0; cy < c1; ++cy) {
+        int count = 0;
+        for (int dy = 0; dy < subH; ++dy) {
+          const int y = int(cy) * subH + dy;
+          if (y >= int(height)) break;
+          float* r = rgb.data() + size_t(count) * 3 * size_t(width);
+          unpackRow(y, r, r + width, r + size_t(width) * 2);
+          rows[count * 3 + 0] = r;
+          rows[count * 3 + 1] = r + width;
+          rows[count * 3 + 2] = r + size_t(width) * 2;
+          ++count;
+        }
+        writer.writeBlock(int(cy), rows, count);
       }
-      writer.writeBlock(int(cy), rows, count);
+    });
+    gpu.unmapReadback();
+    return true;
+  }
+
+  // Fused half -> YUV. The old path unpacked each band into float RGB and then walked it again to
+  // write luma and chroma; here both come out of the same half load, two pixels per vector
+  // conversion. Chroma stays a box average of the subW x subH block, matching YuvRowWriter.
+  const YuvQuant quant = yuvQuant(format.bits, format.fullRange);
+  const YuvCoefficients co = yuvCoefficients(format.matrix);
+  const int subW = format.subW, subH = format.subH;
+  const int chromaWidth = (width + subW - 1) / subW;
+  const int chromaHeight = (height + subH - 1) / subH;
+  const int bytes = format.bytesPerSample();
+  parallelRows(uint32_t(chromaHeight), [&](uint32_t c0, uint32_t c1) {
+    for (uint32_t cy = c0; cy < c1; ++cy) {
+      const uint32_t y0 = cy * uint32_t(subH);
+      const uint32_t rows = (y0 + uint32_t(subH) <= height) ? uint32_t(subH) : height - y0;
+      for (uint32_t cx = 0; cx < uint32_t(chromaWidth); ++cx) {
+        const uint32_t x0 = cx * uint32_t(subW);
+        const uint32_t cols = (x0 + uint32_t(subW) <= width) ? uint32_t(subW) : width - x0;
+        float sr = 0.0f, sg = 0.0f, sb = 0.0f;
+        for (uint32_t dy = 0; dy < rows; ++dy) {
+          const uint32_t y = y0 + dy;
+          const auto* src = reinterpret_cast<const uint16_t*>(raw + size_t(y) * pitch);
+          if (cols == 2) {
+            float p[8];
+            loadRgba2(src + size_t(x0) * 4, p);
+            for (uint32_t i = 0; i < 2; ++i) {
+              const float r = p[i * 4 + 0], g = p[i * 4 + 1], b = p[i * 4 + 2];
+              const float Y = co.kr * r + co.kg * g + co.kb * b;
+              yuvStoreSample(out.data[0], out.stride[0], int(x0 + i), int(y), bytes,
+                             yuvWriteClamp(quant.lumaOutOffset + Y * quant.lumaOutScale,
+                                           quant.maxValue));
+              sr += r;
+              sg += g;
+              sb += b;
+            }
+          } else {
+            for (uint32_t dx = 0; dx < cols; ++dx) {
+              const auto* s = src + size_t(x0 + dx) * 4;
+              const float r = halfToFloatFast(s[0]);
+              const float g = halfToFloatFast(s[1]);
+              const float b = halfToFloatFast(s[2]);
+              const float Y = co.kr * r + co.kg * g + co.kb * b;
+              yuvStoreSample(out.data[0], out.stride[0], int(x0 + dx), int(y), bytes,
+                             yuvWriteClamp(quant.lumaOutOffset + Y * quant.lumaOutScale,
+                                           quant.maxValue));
+              sr += r;
+              sg += g;
+              sb += b;
+            }
+          }
+        }
+        const float inv = 1.0f / float(rows * cols);
+        const float R = sr * inv, G = sg * inv, B = sb * inv;
+        const float Y = co.kr * R + co.kg * G + co.kb * B;
+        const float cb = (B - Y) / (2.0f * (1.0f - co.kb));
+        const float cr = (R - Y) / (2.0f * (1.0f - co.kr));
+        yuvStoreSample(out.data[1], out.stride[1], int(cx), int(cy), bytes,
+                       yuvWriteClamp(quant.chromaOutOffset + cb * quant.chromaOutScale,
+                                     quant.maxValue));
+        yuvStoreSample(out.data[2], out.stride[2], int(cx), int(cy), bytes,
+                       yuvWriteClamp(quant.chromaOutOffset + cr * quant.chromaOutScale,
+                                     quant.maxValue));
+      }
     }
   });
   gpu.unmapReadback();
@@ -768,8 +1304,15 @@ bool fillConstantInputs(Gpu& gpu, uint32_t width, uint32_t height, std::string& 
 
   uint8_t* motion = gpu.mapMotion(error);
   if (!motion) return false;
+  // No motion clip at the shared-texture boundary yet: use the documented zero field.  It is not
+  // a constant pan; DLSS-G treats it as "no engine-provided MV" and its fusion barely changes.
+  // Real vectors must be uploaded here once the caller can supply them.
   for (uint32_t y = 0; y < gpu.motionHeight(); ++y) {
-    std::memset(motion + size_t(y) * gpu.motionRowPitch(), 0, size_t(gpu.motionWidth()) * 4);
+    uint16_t* row = reinterpret_cast<uint16_t*>(motion + size_t(y) * gpu.motionRowPitch());
+    for (uint32_t x = 0; x < gpu.motionWidth(); ++x) {
+      row[2 * x + 0] = 0;
+      row[2 * x + 1] = 0;
+    }
   }
   gpu.unmapMotion();
   return true;
@@ -779,6 +1322,8 @@ bool fillConstantInputs(Gpu& gpu, uint32_t width, uint32_t height, std::string& 
 
 struct NgxSession::Impl {
   std::unique_ptr<Gpu> gpu;
+  std::unique_ptr<NvOfMotion> nvof;
+  MotionMode motion = MotionMode::Off;
   HMODULE proxyModule = nullptr;
   Engine engine = Engine::Dlss;
   NVSDK_NGX_Parameter* capabilities = nullptr;
@@ -811,6 +1356,9 @@ struct NgxSession::Impl {
   // Camera description handed to every pass, and the per-pass global motion fitted from the field
   // belonging to that pass's frame (identity = all zeros when unset or when the fit fails).
   int camera = 0;
+  // DLSS-G preset the engine pack was left at when this process loaded the proxy (1 = A, 3 = C,
+  // 0 = the pack had no Preset key). Fixed for the process, so a second filter must match it.
+  int preset = 0;
   HANDLE ngxSlot = nullptr;  // named mutex that marks this process as having taken the NGX slot
   float affinePrev[6] = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
   float affineCur[6] = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
@@ -819,7 +1367,7 @@ struct NgxSession::Impl {
   void shutdown();
   bool runPass(bool reset, bool captureOutput, bool copyColor, bool copyMotion,
                uint32_t mfCount, uint32_t mfIndex, const float* cameraAffine,
-               std::string& error);
+               std::string& error, bool captureTexture = false);
 };
 
 namespace {
@@ -853,8 +1401,25 @@ bool NgxSession::Impl::init(const Config& config, std::string& error) {
   motionHeight = config.motionHeight ? config.motionHeight : config.height;
   camera = config.camera;
   engine = config.engine;
+  motion = config.motion;
   g_logEnabled.store(config.log, std::memory_order_relaxed);
   if (!claimNgxSlot(engine, &ngxSlot, error)) return false;
+
+  // The preset is not an NGX parameter: the proxy reads it from the pack's INI while it installs and
+  // pins it for the rest of the process, so the file has to say what this process wants before
+  // version.dll is in memory. The lock stays held through feature creation, the last point the
+  // runtime could read the file.
+  PresetLock presetLock;
+  if (engine == Engine::Dlss) {
+    if (!presetLock.acquire(error)) return false;
+    preset = applyPreset(config.proxyDir, config.preset, error);
+    if (!error.empty()) return false;
+    if (config.log) {
+      std::fprintf(stderr, "[vdlssg] DLSS-G preset %s%s\n", presetName(preset),
+                   config.preset != 0 ? " (written to the engine pack's dlssg_sm86.ini)"
+                                      : " (from the engine pack; preset= not given)");
+    }
+  }
 
   if (!loadProxy(config.proxyDir, proxyModule, error)) return false;
 
@@ -867,7 +1432,44 @@ bool NgxSession::Impl::init(const Config& config, std::string& error) {
                  error)) {
     return false;
   }
+  // DLSS-G returns RGBA16F; when the host wants planar 4:2:0 we can convert on the GPU and read
+  // back only the packed YUV buffer, instead of pulling 16.6 MB of half floats over PCIe.
+  if (engine == Engine::Dlss && format.isYuv()) {
+    // The packed layout is fixed for the session. 8-bit packs four luma samples per uint and is
+    // selected for 8-bit sources, or forced for wider sources; 10-bit keeps one sample per 16-bit
+    // lane. The output frame still uses the caller's format either way.
+    ColorFormat packed = format;
+    packed.bits = (config.force8Bit || format.bits <= 8) ? 8 : 10;
+    std::string yuvError;
+    if (!gpu->enableYuv420(packed, yuvError)) {
+      if (config.log) {
+        fprintf(stderr, "[vdlssg] GPU YUV readback disabled: %s\n", yuvError.c_str());
+      }
+    } else if (config.log) {
+      fprintf(stderr, "[vdlssg] GPU YUV readback: %d-bit packed, %llu bytes/frame%s\n",
+              gpu->yuvBits(), static_cast<unsigned long long>(gpu->yuv420Bytes()),
+              config.force8Bit ? " (forced)" : "");
+    }
+  }
   gpu->setProfiling(true);
+
+  // NVOF is only useful on the shared-texture bridge, and only the DLSS engine consumes an
+  // external motion field. Auto quietly keeps the zero field when the driver/runtime is absent.
+  if (engine == Engine::Dlss && motion != MotionMode::Off) {
+    std::unique_ptr<NvOfMotion> nv(new NvOfMotion());
+    std::string nvError;
+    if (!nv->init(gpu->device(), width, height, 4, nvError)) {
+      if (motion == MotionMode::Nvof) {
+        error = "NVOF: " + nvError;
+        return false;
+      }
+      if (config.log) std::fprintf(stderr, "[vdlssg] NVOF disabled: %s\n", nvError.c_str());
+    } else {
+      nvof = std::move(nv);
+      if (config.log) std::fprintf(stderr, "[vdlssg] NVOF enabled (grid 4)\n");
+    }
+  }
+
   if (!fillConstantInputs(*gpu, width, height, error)) return false;
 
   // NGX only searches the paths it is given. The snippet (310.9.16 nvngx_dlssg.dll) lives under
@@ -962,7 +1564,7 @@ void NgxSession::Impl::shutdown() {
 
 bool NgxSession::Impl::runPass(bool reset, bool captureOutput, bool copyColor, bool copyMotion,
                                uint32_t mfCount, uint32_t mfIndex, const float* cameraAffine,
-                               std::string& error) {
+                               std::string& error, bool captureTexture) {
   if (!gpu->begin(error)) return false;
   gpu->recordDisableReset();
   gpu->recordPreEvaluate(copyColor, copyMotion);
@@ -986,7 +1588,13 @@ bool NgxSession::Impl::runPass(bool reset, bool captureOutput, bool copyColor, b
   params->Set(NVSDK_NGX_DLSSG_Parameter_BackbufferFrameID, frameId++);
   const NVSDK_NGX_Result r = NGX_D3D12_EVALUATE_DLSSG(gpu->list(), feature, params, &eval, &opt);
   gpu->recordEvaluated();
-  if (captureOutput) gpu->recordPostEvaluate();
+  if (captureOutput) {
+    if (captureTexture) {
+      gpu->recordConvertOutput();
+    } else {
+      gpu->recordPostEvaluate();
+    }
+  }
   gpu->recordDisableReadback();
   if (!gpu->endAndWait(error)) return false;
   if (NVSDK_NGX_FAILED(r)) {
@@ -1013,6 +1621,13 @@ NgxSession* NgxSession::acquire(const Config& config, std::string& error) {
         !g_session->impl_->format.sameLayout(config.format)) {
       error = "vdlssg: only one frame size, pixel layout and engine per process is supported "
               "(restart with a single size)";
+      return nullptr;
+    }
+    // The proxy pinned one preset when this process loaded it; another value would need a restart.
+    if (config.preset != 0 && g_session->impl_->preset != config.preset) {
+      error = std::string("vdlssg: the DLSS-G preset is fixed for the process (pinned ") +
+              presetName(g_session->impl_->preset) + "), but this filter asked for " +
+              presetName(config.preset) + "; restart with a single preset";
       return nullptr;
     }
     ++g_refCount;
@@ -1089,33 +1704,67 @@ bool NgxSession::generate(const PlaneView& prev, const PlaneView& cur, const Pla
     refit(curMv, s.affineCur);
   }
 
+  // The packed layout is fixed, but the matrix/range can change with the source frame's properties.
+  // Refresh the shader constants before either pass so pass 2 uses this frame's encoding.
+  if (s.gpu->yuv420Enabled()) s.gpu->setYuvColor(format);
+
+  // Host-side split: uploads, the readback (map + conversion + plane writes) and the whole call.
+  // evaluateMs alone made the engine look like the bottleneck when most of the frame was spent
+  // moving pixels on the CPU.
+  const auto clockNow = [] { return std::chrono::steady_clock::now(); };
+  const auto sinceMs = [](std::chrono::steady_clock::time_point start) {
+    return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
+        .count();
+  };
+  const auto wallStart = clockNow();
+  double uploadMs = 0.0;
+  double readbackMs = 0.0;
+
   double spent = 0.0;
+  double gpuSpent = 0.0;
+  double copySpent = 0.0;
   if (!samePair) {
     // Pass 1: previous frame. It resets the temporal history; its output is thrown away.
     if (!nextPair) {
+      const auto t = clockNow();
       if (!uploadColor(*s.gpu, prev, s.width, s.height, format, error)) return false;
+      uploadMs += sinceMs(t);
       // Same reuse rule as the colour texture: the previous pair's pass 2 left its current frame's
       // motion field in the texture, and that frame is this pair's previous frame.
-      if (prevMv && !uploadMotion(*s.gpu, *prevMv, error)) return false;
+      if (prevMv) {
+        const auto m = clockNow();
+        if (!uploadMotion(*s.gpu, *prevMv, error)) return false;
+        uploadMs += sinceMs(m);
+      }
     }
     if (!s.runPass(true, false, !nextPair, prevMv && !nextPair, 1, 1, s.affinePrev, error)) {
       return false;
     }
     spent += s.gpu->timings().evaluateMs;
+    gpuSpent += s.gpu->timings().totalMs;
+    copySpent += s.gpu->timings().copyMs;
 
+    const auto t = clockNow();
     if (!uploadColor(*s.gpu, cur, s.width, s.height, format, error)) return false;
+    uploadMs += sinceMs(t);
     s.pairSeeded = false;
   }
 
   // Pass 2: current frame, whose interpolation result is what we read back. Another slot of the
   // same pair finds both the colour and the motion texture already holding this frame.
   const bool uploadCurMv = curMv && !samePair;
-  if (uploadCurMv && !uploadMotion(*s.gpu, *curMv, error)) return false;
+  if (uploadCurMv) {
+    const auto m = clockNow();
+    if (!uploadMotion(*s.gpu, *curMv, error)) return false;
+    uploadMs += sinceMs(m);
+  }
   if (!s.runPass(false, true, !samePair, uploadCurMv, multiFrameCount, multiFrameIndex,
                  s.affineCur, error)) {
     return false;
   }
   spent += s.gpu->timings().evaluateMs;
+  gpuSpent += s.gpu->timings().totalMs;
+  copySpent += s.gpu->timings().copyMs;
   s.lastPairIndex = pairIndex;
   s.lastPairValid = true;
   s.seededPairIndex = pairIndex;
@@ -1128,9 +1777,172 @@ bool NgxSession::generate(const PlaneView& prev, const PlaneView& cur, const Pla
   // runtime sets it even though the interpolation texture is written correctly (a slot evaluated
   // on its own matches the mid-sequence result bit for bit), so only the 2x path obeys it.
   result.suppressed = suppressed && multiFrameCount <= 1;
-  if (result.suppressed) return true;
+  result.uploadMs = uploadMs;
+  result.gpuMs = gpuSpent;
+  result.copyMs = copySpent;
+  if (result.suppressed) {
+    result.wallMs = sinceMs(wallStart);
+    return true;
+  }
 
-  return readbackColor(*s.gpu, out, s.width, s.height, format, error);
+  const auto rb = clockNow();
+  const bool ok = readbackColor(*s.gpu, out, s.width, s.height, format, error);
+  readbackMs = sinceMs(rb);
+  result.readbackMs = readbackMs;
+  result.wallMs = sinceMs(wallStart);
+  return ok;
+}
+
+bool NgxSession::generateTextures(void* prev, void* cur, uint64_t streamId, int64_t pairIndex,
+                                  uint32_t multiFrameCount, uint32_t multiFrameIndex,
+                                  const ColorFormat& format, void* out, GenerateResult& result,
+                                  std::string& error) {
+  std::lock_guard<std::mutex> guard(g_lock);
+  Impl& s = *impl_;
+  if (!s.feature) {
+    error = std::string("vdlssg: ") + engineName(s.engine) + " feature is not available";
+    return false;
+  }
+  if (!prev || !cur || !out) {
+    error = "vdlssg: shared texture handles are null";
+    return false;
+  }
+  if (multiFrameCount < 1) multiFrameCount = 1;
+  if (multiFrameIndex < 1) multiFrameIndex = 1;
+  if (multiFrameIndex > multiFrameCount) multiFrameIndex = multiFrameCount;
+  if (multiFrameCount > s.multiFrameCountMax) {
+    error = "vdlssg: multiFrameCount " + std::to_string(multiFrameCount) +
+            " exceeds DLSSG.MultiFrameCountMax " + std::to_string(s.multiFrameCountMax);
+    return false;
+  }
+  if (streamId != s.cacheStreamId) {
+    s.cacheStreamId = streamId;
+    s.lastPairValid = false;
+    s.pairSeeded = false;
+    s.lastPairIndex = -1;
+    s.seededPairIndex = -1;
+  }
+  if (!s.gpu->enableSharedTextures(format, error)) return false;
+  if (!s.gpu->openSharedInput(prev, 0, error)) return false;
+  if (!s.gpu->openSharedInput(cur, 1, error)) return false;
+  if (!s.gpu->openSharedOutput(out, error)) return false;
+
+  const auto wallStart = std::chrono::steady_clock::now();
+  // Pass 1: previous frame into colour, reset the temporal history. Pass 2: current frame and the
+  // requested intermediate index. The texture bridge skips PlaneView and the readback entirely.
+  if (!s.gpu->begin(error)) return false;
+  s.gpu->recordConvertInput(0);
+  if (!s.gpu->endAndWait(error)) return false;
+  if (!s.runPass(true, false, false, false, 1, 1, nullptr, error)) return false;
+
+  if (!s.gpu->begin(error)) return false;
+  s.gpu->recordConvertInput(1);
+  if (!s.gpu->endAndWait(error)) return false;
+  if (!s.runPass(false, true, false, false, multiFrameCount, multiFrameIndex, nullptr, error, true)) {
+    return false;
+  }
+
+  s.lastPairIndex = pairIndex;
+  s.lastPairValid = true;
+  s.seededPairIndex = pairIndex;
+  s.pairSeeded = true;
+  result = GenerateResult{};
+  result.wallMs = std::chrono::duration<double, std::milli>(
+                      std::chrono::steady_clock::now() - wallStart)
+                      .count();
+  return true;
+}
+
+bool NgxSession::generateTexturesMulti(void* prev, void* cur, uint64_t streamId,
+                                       int64_t pairIndex, uint32_t multiFrameCount,
+                                       void* const* outs, uint32_t outCount,
+                                       const ColorFormat& format, GenerateResult& result,
+                                       std::string& error) {
+  std::lock_guard<std::mutex> guard(g_lock);
+  Impl& s = *impl_;
+  if (!s.feature) {
+    error = std::string("vdlssg: ") + engineName(s.engine) + " feature is not available";
+    return false;
+  }
+  if (!prev || !cur || !outs || outCount == 0) {
+    error = "vdlssg: shared texture arguments are invalid";
+    return false;
+  }
+  if (multiFrameCount < 2) multiFrameCount = 2;
+  if (multiFrameCount > s.multiFrameCountMax) {
+    error = "vdlssg: multiFrameCount " + std::to_string(multiFrameCount) +
+            " exceeds DLSSG.MultiFrameCountMax " + std::to_string(s.multiFrameCountMax);
+    return false;
+  }
+  if (outCount > multiFrameCount) {
+    error = "vdlssg: too many output textures for this multiFrameCount";
+    return false;
+  }
+  for (uint32_t i = 0; i < outCount; ++i) {
+    if (!outs[i]) {
+      error = "vdlssg: shared output handle is null";
+      return false;
+    }
+  }
+  if (streamId != s.cacheStreamId) {
+    s.cacheStreamId = streamId;
+    s.lastPairValid = false;
+    s.pairSeeded = false;
+    s.lastPairIndex = -1;
+    s.seededPairIndex = -1;
+  }
+  if (!s.gpu->enableSharedTextures(format, error)) return false;
+  if (!s.gpu->openSharedInput(prev, 0, error)) return false;
+  if (!s.gpu->openSharedInput(cur, 1, error)) return false;
+  // The shared path has no CPU colour upload, so initialize the mandatory depth/motion
+  // textures like generate() does.  Otherwise their contents are undefined and DLSS-G can
+  // suppress every intermediate frame (all outputs then equal cur).
+  if (!fillConstantInputs(*s.gpu, s.width, s.height, error)) return false;
+
+  // Run NVOF on the shared luma planes and leave the result in the motion upload buffer. It has
+  // to happen after fillConstantInputs (which clears the field) and before the seed passes.
+  bool useMotion = s.nvof != nullptr;
+  if (useMotion) {
+    if (!s.gpu->begin(error)) return false;
+    s.gpu->recordLuma(0, s.nvof->luma(0));
+    s.gpu->recordLuma(1, s.nvof->luma(1));
+    if (!s.gpu->endAndWait(error)) return false;
+    if (!s.nvof->execute(*s.gpu, error)) {
+      if (s.motion == MotionMode::Nvof) return false;
+      std::fprintf(stderr, "[vdlssg] NVOF disabled: %s\n", error.c_str());
+      s.nvof.reset();
+      useMotion = false;
+    }
+  }
+
+  const auto wallStart = std::chrono::steady_clock::now();
+  // Seed the history with prev once, then evaluate every intermediate index against cur.
+  if (!s.gpu->begin(error)) return false;
+  s.gpu->recordConvertInput(0);
+  if (!s.gpu->endAndWait(error)) return false;
+  if (!s.runPass(true, false, false, false, 1, 1, nullptr, error)) return false;
+
+  if (!s.gpu->begin(error)) return false;
+  s.gpu->recordConvertInput(1);
+  if (!s.gpu->endAndWait(error)) return false;
+  for (uint32_t i = 0; i < outCount; ++i) {
+    if (!s.gpu->openSharedOutput(outs[i], error)) return false;
+    // One reset per pair, then evaluate each intermediate index against the same cur frame.
+    if (!s.runPass(false, true, false, useMotion, multiFrameCount, i + 1, nullptr, error,
+                   true)) {
+      return false;
+    }
+  }
+
+  s.lastPairIndex = pairIndex;
+  s.lastPairValid = true;
+  s.seededPairIndex = pairIndex;
+  s.pairSeeded = true;
+  result = GenerateResult{};
+  result.wallMs = std::chrono::duration<double, std::milli>(
+                      std::chrono::steady_clock::now() - wallStart)
+                      .count();
+  return true;
 }
 
 }  // namespace vdlssg

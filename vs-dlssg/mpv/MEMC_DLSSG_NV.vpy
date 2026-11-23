@@ -24,6 +24,7 @@ Multi = 3
 Scene = 0.25
 Gpu = None
 Pre_H = 0
+Preset = "a"
 Log = False
 ## <2|3|4|5|6> 整数，帧率倍数；每对相邻源帧插 Multi-1 张
 ##   1080p 可以 6（单次约 3 ms），1440p 用 3~4，4K 只用 2（6× 是 22 ms 级且会爆显存）
@@ -31,6 +32,10 @@ Log = False
 ##   快节奏/粒子闪白素材建议 0.25，否则默认行为会把 11% 的帧对 hold 成重复帧；更稳妥用 0.35
 ## 整数，使用的显卡序号，0 为排序一号；None 跟随 sm86 代理在安装时选中的那张卡（多显卡机器推荐）
 ## 整数，>0 时先把源预缩到这个高度再补帧（4K 6× 显存吃紧时可填 1080）
+## <a|c> DLSS-G 模型预设（插件进程内固定，只能重建滤镜才换档）
+##   a = 默认模型（历史行为，与旧版本逐位一致）
+##   c = FG Lite：每生成帧 GPU 时间约少 13%，静态画面与 a 逐像素相同，HUD/遮挡边缘略软
+##   代价：插件会在装载代理前改写引擎包里的 <proxy_dir>\dlssg_sm86.ini，跑过 c 之后包里就停在 C
 ## <True|False> 每帧向 stderr 打一行 evaluate 耗时
 
 #### OSD 参数通道：读 mpv 注入的 user_data 全局变量 ####
@@ -59,6 +64,8 @@ if os.environ.get("VDLSSG_SCENE"):
     Scene = float(os.environ["VDLSSG_SCENE"])
 if os.environ.get("VDLSSG_PRE_H"):
     Pre_H = int(os.environ["VDLSSG_PRE_H"])
+if os.environ.get("VDLSSG_PRESET"):
+    Preset = os.environ["VDLSSG_PRESET"].strip().lower()
 if os.environ.get("VDLSSG_LOG"):
     Log = True
 
@@ -76,6 +83,11 @@ if _ud:
         Gpu = None if _gpu in ("none", "auto", "") else int(_gpu)
     if "log" in _ud:
         Log = _ud["log"].strip().lower() not in ("0", "false", "off", "no", "")
+    if "preset" in _ud:
+        # 只挡住空值；非法档位交给插件报错（错误文案只维护一份）
+        _preset = _ud["preset"].strip().lower()
+        if _preset:
+            Preset = _preset
 
 #### 插件定位：优先自动加载（vs-plugins），否则从本脚本旁加载 ####
 
@@ -114,7 +126,8 @@ elif clip.format.sample_type == vs.FLOAT and clip.format.bits_per_sample == 32:
     src = clip
 else:
     src = core.resize.Bilinear(clip, format=vs.RGBS)
-fg = core.vdlssg.FrameGen(src, multi=Multi, scene_threshold=Scene, log=1 if Log else 0,
+fg = core.vdlssg.FrameGen(src, multi=Multi, scene_threshold=Scene, preset=Preset,
+                          log=1 if Log else 0,
                           **({} if Gpu is None else {"gpu": Gpu}))
 
 # 输出格式与输入相同：YUV 源原样交给 mpv；只有 RGB 源才转回 mpv 能收的 10bit YUV
@@ -126,12 +139,12 @@ if not out.fps_num or not out.fps_den:
 
 # 上行报告：告诉 mpv 实际生效的参数；写盘失败只影响 OSD，不会被这里打断
 if k7fb is not None:
-    _summary = "%d× · 切镜 %g" % (Multi, Scene)
+    _summary = "%d× · 预设 %s · 切镜 %g" % (Multi, Preset, Scene)
     if Pre_H:
         _summary += " · 预缩 %dp" % Pre_H
     k7fb.publish(
         __file__, title="DLSSG", engine="vdlssg",
-        params={"multi": Multi, "scene": Scene,
+        params={"multi": Multi, "scene": Scene, "preset": Preset,
                 "gpu": "auto" if Gpu is None else Gpu,
                 "pre_h": Pre_H, "log": Log},
         summary=_summary,

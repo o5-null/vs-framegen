@@ -90,6 +90,8 @@ E:\code\VFI\.venv\Scripts\vspipe.exe -p E:\code\dlssg-vfi\test\mf6.vpy NUL
   约 195 fps 是它自己 8bit 宿主的数据，不能直接套到浮点路径。
 - **`dlssg_sm86\logs\` 必须存在**，否则代理零日志静默失败（`smoke.py` 之前踩过）。
 - 代理必须在 NGX `Init` 之前加载；插件在 `loadProxy()` 里做，`proxy_dir` 换目录时不要绕开它。
+- **模型预设**只由 `dlssg_sm86.ini` 的 `[DLSSG] Preset` 决定，代理装载时一次性钉死；插件用
+  `preset="a"/"c"` 在装载前改写这一行，进程内不可再换（详见 `docs\vdlssg-plugin.md`）。
 - 4K 6× 显存吃紧：掉帧或 NGX 拒绝时降 `multi`（4× 用 stock 包即可）。
 - 目录可以整包拷走；只要 `version.dll` 与 `dlssg_sm86\` 同级，`proxy_dir` 指过去就能用。
 

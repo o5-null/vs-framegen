@@ -22,6 +22,7 @@ using fg::Config;
 using fg::ColorFormat;
 using fg::Engine;
 using fg::GenerateResult;
+using fg::MotionMode;
 using fg::PlaneSink;
 using fg::PlaneView;
 
@@ -55,6 +56,21 @@ class NgxSession {
                 const PlaneView* curMv, uint64_t streamId, int64_t pairIndex,
                 uint32_t multiFrameCount, uint32_t multiFrameIndex, const ColorFormat& format,
                 const PlaneSink& out, GenerateResult& result, std::string& error);
+
+  // Zero-copy variant: prev/cur/out are D3D11 shared NT handles for NV12/P010 input and RGBA8
+  // output. No CPU plane is touched; the bridge converts both directions on the GPU.
+  bool generateTextures(void* prev, void* cur, uint64_t streamId, int64_t pairIndex,
+                        uint32_t multiFrameCount, uint32_t multiFrameIndex,
+                        const ColorFormat& format, void* out, GenerateResult& result,
+                        std::string& error);
+
+  // Batch variant for a player: outCount shared output textures receive intermediate indices
+  // 1..outCount of the same pair. The first converted frame only initialises the history, so the
+  // whole sequence costs one extra pass instead of one per generated frame.
+  bool generateTexturesMulti(void* prev, void* cur, uint64_t streamId, int64_t pairIndex,
+                             uint32_t multiFrameCount, void* const* outs, uint32_t outCount,
+                             const ColorFormat& format, GenerateResult& result,
+                             std::string& error);
 
   // A fresh identifier for one filter instance's frame stream.
   uint64_t newStream();

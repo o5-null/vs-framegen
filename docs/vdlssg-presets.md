@@ -8,6 +8,11 @@ Ray Reconstruction（RR），它们才有 `NVSDK_NGX_Parameter_DLSS_Hint_Render_
 因此"把不同预设迁移到视频插件"这件事对 FG **没有对应物**。能迁的只有一批行为开关，
 其中真正会改变画面的我们逐个实测过。
 
+> **2026-11-23 补充**：上面这条只对**官方 NGX API** 成立。本项目实际走的 DLSS 4.5 引擎包
+> （`bin\dlss45`）里，sm86 代理自己实现了 `[DLSSG] Preset`（A/B/C），它不是 NGX 参数、也不走
+> `params->Set`，而是代理装载时从 `dlssg_sm86.ini` 读入并钉死在进程上。已实测三档差异并做成
+> 插件参数 `preset="a"/"c"`，详见 §6。
+
 ## 1. 取证：API 里确实没有 preset
 
 ```bash
@@ -120,6 +125,7 @@ if (opt.menuDetect) {
 | `multi` = 2 / 3 / 4 | 每对源帧生成 1 / 2 / 3 张中间帧（走 `MultiFrameCount`/`MultiFrameIndex`） |
 | `scene_threshold` = 0.15（缺省） | 切镜判定灵敏度，超过即吐源帧（`_DLSSGFallback=1`） |
 | `gpu` | 选哪张显卡；不写时跟随 sm86 代理选中的那张（多显卡机器别再写死 0） |
+| `preset` = `a` / `c`（缺省沿用引擎包） | DLSS 4.5 引擎包的模型预设，见 §6 |
 
 质量本身没有档位可调。想更好只能换算法（RIFE/FILM 等），想更快只能降 `multi`。
 
@@ -138,3 +144,73 @@ cmd /c E:\code\VFI\.venv\Scripts\python.exe E:\code\dlssg-vfi\test\compare_ppm.p
 
 运行目录必须是含 `version.dll` 的 `work\`（代理要被显式拉起），否则
 NGX 链路起不来，见 `docs\vdlssg-on-3080-spike.md` 的三条前提。
+
+## 6. 引擎包的 `[DLSSG] Preset`（A / B / C）
+
+官方 API 没有预设，但本项目用的 DLSS 4.5 引擎包在**代理层**加了一个：`bin\dlss45\dlssg_sm86.ini`
+的
+
+```ini
+[DLSSG]
+Optimized=1
+Preset=A
+```
+
+`version.dll` 代理在 install 时读它，把 `preset_id` 钉死在整个进程上（日志
+`{"event":"preset_pinned","requested":"A","preset_id":1,...}`，`hooks.preset_select=0x344f0`）。
+NGX 每进程只 init 一次，后端 `sm86_backend.dll` 也没有 `ConfigurePreset` 之类的导出，所以运行期
+改不了，只能在装载代理之前改文件。
+
+| preset | 包内原文 | preset_id | 语义 |
+|---|---|---|---|
+| `A` | UI recomposition off, FG Lite off | 1 | 历史模型 |
+| `B` | UI recomposition on | 2 | 插帧用无 UI 画面，再把 UI 平面贴回去，让 HUD/字幕保持清晰 |
+| `C` | FG Lite | 3 | 每生成帧 GPU 时间约少 32–54%（文档说法），画质略低，仍走本项目的加速内核 |
+
+`Auto` 已于 2026-10-22 删除（按 `A` 处理）；旧的 `[Compatibility] Preset` 不再读取。
+
+### 实测（RTX 3080、1080p、multi=6、sintel 90..113 源帧、各两轮）
+
+| preset | 代理日志 | wall ms/输出帧 | GPU mean | GPU p50 |
+|---|---|---|---|---|
+| `A` | `preset_id:1, effective:0, overrode_runtime:false` | 6.44 / 6.26 | 3.91 / 3.86 | 3.05 / 3.11 |
+| `B` | `preset_id:2, effective:1` + `preset_ineffective` | 6.37 | 3.97 | 3.06 |
+| `C` | `preset_id:3, lite_effective:1, overrode_runtime:true` | 6.04 / 6.06 | 3.57 / 3.53 | 2.66 / 2.66 |
+
+`C` 相对 `A`：wall −4.5%、GPU 均值 −8%、p50 −13%。
+
+画质（同源同图，只改 INI）：静态段（帧 2/5/8/11/14/17）`C` 与 `A` **逐像素完全相同**；运动段
+PSNR 45.64–47.95 dB、max|Δ| 0.14–0.18（线性 0..1）、约 68% 像素差 >1e-4，差异集中在 HUD 类硬边缘。
+
+### B 为什么等于 A
+
+UI 重组要运行库同时拿到三件东西（`ngxsdk\include\nvsdk_ngx_helpers_dlssg_d3d.h:32-44`）：
+
+| 输入 | 含义 | 插件实际给的 |
+|---|---|---|
+| `pHudless` | 不含 UI 的画面 | 与后缓冲同一张纹理（`src\ngx_session.cpp` 的 `eval.pBackbuffer = eval.pHudless = gpu->colorTexture()`），UI 已烧进去 |
+| `pUI` / `pUIAlpha` | UI 颜色层与覆盖度 | 从未赋值（空指针） |
+
+代理因此在 install 后立刻判：
+
+```json
+{"event":"preset_ineffective","hudless":true,"ui":false,"missing":["DLSSG.UI"],
+ "reason":"preset B (UI recomposition) needs the game to hand DLSS-G both a HUD-less image and a UI plane; it does not, and the pin cannot supply them",
+ "effect":"the runtime's own behaviour applies: generated frames are the same as without Preset=B"}
+```
+
+`hudless:true` 只说明指针非空。成片视频里也没有可分离的 UI 层——真要用 B 得新增"无 UI 画面 +
+UI 颜色 + UI 遮罩"三路输入，那是新的输入设计，不是预设开关。
+
+### 插件侧
+
+`preset="a"` / `preset="c"`（`core.vdlssg.FrameGen`，其它引擎传了会报错）。实现：
+
+- `src\frame_gen.cpp` 解析参数（`b` 直接报错并解释原因）。
+- `src\ngx_session.cpp` 在 `Impl::init` 里、`loadProxy()` 之前把 `[DLSSG] Preset` 改写成 `A`/`C`
+  （只替换该值，写临时文件再 `MoveFileExW` 换入），并用命名互斥 `Local\vs-dlssg-preset-ini`
+  把"改写 + 装载 + 建 feature"串起来，避免两个进程互相覆盖。
+- 同一进程里第二个 `FrameGen` 换预设会报错；换预设要另起进程。
+- 改写落在**引擎包文件**上：跑过 `preset="c"` 之后包内 INI 就停在 `C`，恢复默认用 `preset="a"`。
+
+细节与文档见 `vs-dlssg\docs\vdlssg-plugin.md` 的"模型预设 `preset`"一节。

@@ -13,3 +13,24 @@
 - .\k7sfunc-wiki、.\k7sfunc-wiki-pages、.\vs-framegen-wiki-pages：文档与静态页，只读产出，改动跟在对应仓库后面
 
 跨仓库的改动要分别提交到各自的仓库；本仓库的 .gitignore 只负责把它们挡在外面，不会被一起提交。
+
+## 测试环境（Python / VapourSynth）
+
+脚本用本仓库自己的 uv 虚拟环境 `.venv`（已被 .gitignore 挡住），不要借用其它项目的 venv：
+
+```
+uv venv --python 3.12 .venv
+uv pip install --python .venv\Scripts\python.exe vapoursynth==74 numpy vsrepo
+.venv\Scripts\vsrepo.exe install ffms2 imwri
+```
+
+- vapoursynth 钉在 **74**：`测试环境\mpv-lazy\vs-plugins\akarin.dll` 是 API 3 插件，R82 起拒绝加载
+  （`uses API 3, which is no longer supported`），而 k7sfunc 的 RIFE_NV / RIFE_AJI 都依赖 akarin。
+- ffms2 / imwri 由 vsrepo 装进 `.venv\Lib\site-packages\vapoursynth\plugins\vsrepo`（VS 自动扫描该子目录）。
+- 其余插件不进 venv，按路径 LoadPlugin：akarin/vstrt（+ vsmlrt-cuda 运行时）在 `测试环境\mpv-lazy\vs-plugins`；
+  aji 运行时是 `work\aji-models`（`vsaji\dist\aji` 的拷贝，用 `AJI_DIR` 指过去）。
+- 测速脚本在 `work\aji-rife-test`（不进 git）：`one.py` 一次跑一种引擎+模型，`mk_src.py` 把
+  `测试数据\1080p` 的 PNG 转成无损 FFV1（`--source ffv1`），避免把 PNG 解码算进引擎耗时。
+- aji 的分阶段计时桩默认关闭，`AJI_PROFILE=1`（`AJI_PROFILE_EVERY=N`，默认 10 帧）打开，
+  stderr 出 `[aji-profile/plugin]`（上传/交织/回传）与 `[aji-profile/trt]`（setup…infer…crop）两行；
+  桩在 `vsaji/src/aji_host.cpp`、`aji_frames.cpp`、`.deps/engine/src/aji_trt.cpp`，改完要重编 engine + 插件。

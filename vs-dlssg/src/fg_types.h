@@ -97,7 +97,20 @@ struct PlaneSink {
 struct GenerateResult {
   bool suppressed = false;  // runtime asked us to keep the real frame
   double evaluateMs = 0.0;  // GPU time spent on this frame
+  // Host-side split, so a slow frame can be attributed without a profiler. uploadMs covers the
+  // colour/motion upload buffers, readbackMs the map + half/YUV conversion + plane writes, and
+  // wallMs the whole generate() call including uploads and fence waits.
+  double uploadMs = 0.0;
+  double readbackMs = 0.0;
+  double wallMs = 0.0;
+  double gpuMs = 0.0;  // GPU span of every pass in this call: input copies + evaluate + output copy
+  double copyMs = 0.0;  // output texture -> readback, summed over passes
 };
+
+// Optional real motion source for DLSS-G. Off keeps the historical zero field; Nvof runs the
+// driver's optical-flow estimator on the shared luma planes; Auto falls back to Off when NVOF
+// is unavailable.
+enum class MotionMode { Off, Nvof, Auto };
 
 struct Config {
   uint32_t width = 0;
@@ -108,6 +121,7 @@ struct Config {
   // coarser field (Encore's estimator emits one vector per 2x2 block) sets half of that here.
   uint32_t motionWidth = 0;
   uint32_t motionHeight = 0;
+  MotionMode motion = MotionMode::Off;
   // adapterIndex is the DXGI enumerator index from the gpu= parameter. adapterAuto stays true when
   // the script did not name one: the NGX path then follows the adapter the sm86 proxy patched (see
   // resolveAdapter in ngx_session.cpp), the CUDA and Vulkan paths keep taking index 0 as before.
@@ -116,12 +130,25 @@ struct Config {
   Engine engine = Engine::Dlss;
   std::wstring proxyDir;  // folder holding the engine's runtime files
   bool log = false;
+  // Force the DLSS-G GPU YUV readback to 8-bit even when the source is 10-bit (or wider).
+  // The output frame keeps the caller's format; only the packed PCIe transfer is quantised,
+  // so 8-bit values are expanded back to the output bit depth on the CPU. Ignored by engines
+  // that do not use the fused YUV path.
+  bool force8Bit = false;
   // Camera description handed to the runtime:
   //   0 = identity matrices + orthoProjection (what a "no camera" caller does)
   //   1 = a real perspective projection matrix, no inter-frame camera motion
   //   2 = perspective + clipToPrevClip fitted from this pair's motion field
   //   3 = like 2, but cameraMotionIncluded = false (vectors treated as object motion only)
   int camera = 0;
+  // DLSS-G model preset, pinned inside the engine pack's dlssg_sm86.ini before the proxy loads:
+  //   0 = leave the file alone (the pack's own value, A in the shipped pack)
+  //   1 = A: the historical model
+  //   3 = C: FG Lite, ~13% lower p50 GPU time per generated frame, slightly softer around HUD and
+  //       occlusion edges; identical to A on still content
+  // B (2, UI recomposition) is not offered: it needs a HUD-less image plus a UI colour/alpha plane,
+  // which a composed video frame cannot provide, and the runtime then runs as A.
+  int preset = 0;
 };
 
 }  // namespace fg

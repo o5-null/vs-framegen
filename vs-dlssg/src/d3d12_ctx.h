@@ -17,6 +17,9 @@
 #include <cstdint>
 #include <cstring>
 #include <string>
+#include <unordered_map>
+
+#include "fg_types.h"
 
 #if defined(_M_AVX2) || defined(__AVX2__)
 #include <immintrin.h>
@@ -29,6 +32,7 @@ using Microsoft::WRL::ComPtr;
 struct GpuTimings {
   double uploadMs = 0;
   double evaluateMs = 0;
+  double copyMs = 0;  // output texture -> readback buffer
   double totalMs = 0;
   bool valid = false;
 };
@@ -87,10 +91,39 @@ inline float halfToFloat(uint16_t half) {
   return value;
 }
 
-// F16C would do this in one instruction, but MSVC only declares _cvtss_sh/_cvtsh_ss for its own
-// __AVX2__ configuration and rejects them under /arch:AVX2 alone, so the software path stays.
-inline uint16_t floatToHalfFast(float value) { return floatToHalf(value); }
-inline float halfToFloatFast(uint16_t half) { return halfToFloat(half); }
+// The scalar _cvtss_sh/_cvtsh_ss intrinsics are the ones MSVC hides under /arch:AVX2, but the
+// vector forms below are declared for plain AVX2 and convert eight samples per instruction. Keep
+// the scalar software path as the fallback for builds without AVX2.
+inline uint16_t floatToHalfFast(float value) {
+#if defined(_M_AVX2) || defined(__AVX2__)
+  const __m128 in = _mm_set_ss(value);
+  return uint16_t(_mm_extract_epi16(_mm_cvtps_ph(in, _MM_FROUND_TO_NEAREST_INT), 0));
+#else
+  return floatToHalf(value);
+#endif
+}
+
+inline float halfToFloatFast(uint16_t half) {
+#if defined(_M_AVX2) || defined(__AVX2__)
+  const __m128i in = _mm_cvtsi32_si128(int(half));
+  return _mm_cvtss_f32(_mm_cvtph_ps(in));
+#else
+  return halfToFloat(half);
+#endif
+}
+
+#if defined(_M_AVX2) || defined(__AVX2__)
+// Eight halfs -> eight floats. Used by the row loops, which load 2 or 4 pixels at a time.
+inline __m256 half8ToFloat8(const uint16_t* src) {
+  return _mm256_cvtph_ps(_mm_loadu_si128(reinterpret_cast<const __m128i*>(src)));
+}
+
+inline void float8ToHalf8(const float* src, uint16_t* dst) {
+  _mm_storeu_si128(reinterpret_cast<__m128i*>(dst),
+                   _mm256_cvtps_ph(_mm256_loadu_ps(src),
+                                   _MM_FROUND_TO_NEAREST_INT));
+}
+#endif
 
 class Gpu {
  public:
@@ -100,6 +133,10 @@ class Gpu {
   DXGI_FORMAT colorFormat() const { return colorFormat_; }
   ID3D12Device* device() const { return device_.Get(); }
   ID3D12GraphicsCommandList* list() const { return list_.Get(); }
+  // Exposed so the optional NVOF stage can synchronise its own queue against the session queue.
+  ID3D12CommandQueue* queue() const { return queue_.Get(); }
+  ID3D12Fence* fence() const { return fence_.Get(); }
+  uint64_t fenceValue() const { return fenceValue_; }
 
   ID3D12Resource* colorTexture() const { return color_.Get(); }
   ID3D12Resource* outputTexture() const { return output_.Get(); }
@@ -142,6 +179,35 @@ class Gpu {
   const uint8_t* mapReadback(std::string& error);
   void unmapReadback();
 
+  // Fused RGBA16F -> planar 4:2:0 readback. The runtime's colour texture is 16.6 MB at 1080p, and
+  // copying all of it over PCIe costs ~2.5 ms per generated frame; this compute pass writes packed
+  // luma/chroma instead, then copies that. At 10-bit each sample keeps a 16-bit lane (6.2 MB at
+  // 1080p); at 8-bit four luma samples / two chroma samples share one uint (3.1 MB). Only 4:2:0
+  // with a half-float colour texture qualifies (DLSS-G); other engines keep the old path.
+  bool enableYuv420(const fg::ColorFormat& format, std::string& error);
+  bool yuv420Enabled() const { return yuvPso_ != nullptr; }
+  // Packed readback bit depth: 8 for the compact layout, 10 for the P010-style layout.
+  int yuvBits() const { return yuvBits_; }
+  // Refresh the matrix/range constants from a frame's properties. The packed layout (and therefore
+  // the shader) is fixed for the session; only the colour encoding can change per pair.
+  void setYuvColor(const fg::ColorFormat& format);
+  const uint8_t* mapYuvReadback(std::string& error);
+  void unmapYuvReadback();
+  uint64_t yuv420Bytes() const { return yuvReadbackBytes_; }
+
+  // Zero-copy bridge path: D3D11 shared NV12/P010 in, D3D11 shared RGBA8 out. The D3D12 side only
+  // opens the handles; the owning D3D11 device keeps the textures alive. Input is converted to the
+  // session's RGBA16F colour texture before evaluation, output after.
+  bool enableSharedTextures(const fg::ColorFormat& format, std::string& error);
+  void setSharedColor(const fg::ColorFormat& format);
+  bool openSharedInput(void* handle, int slot, std::string& error);
+  bool openSharedOutput(void* handle, std::string& error);
+  void recordConvertInput(int slot);
+  void recordConvertOutput();
+  // P010/NV12 luma -> R8_UNORM for NVOF. dst is left in COMMON, which is what NVOF expects.
+  void recordLuma(int slot, ID3D12Resource* dst);
+  bool sharedTexturesEnabled() const { return shareInPso_ != nullptr; }
+
   void setProfiling(bool on) { profiling_ = on; }
   const GpuTimings& timings() const { return timings_; }
 
@@ -149,6 +215,8 @@ class Gpu {
   bool createDevice(IDXGIAdapter1* adapter, std::string& error);
   bool createResources(std::string& error);
   bool createDisable(std::string& error);
+  bool createSharePipelines(std::string& error);
+  void recordYuv420Convert();
   bool createUpload(const D3D12_RESOURCE_DESC& desc, ComPtr<ID3D12Resource>& buffer,
                     D3D12_PLACED_SUBRESOURCE_FOOTPRINT& footprint, uint64_t& bytes,
                     const char* label, std::string& error);
@@ -173,6 +241,39 @@ class Gpu {
   ComPtr<ID3D12Resource> color_, output_, depth_, motion_;
   ComPtr<ID3D12Resource> colorUpload_, depthUpload_, motionUpload_, readback_;
   ComPtr<ID3D12Resource> disable_, disableUpload_, disableReadback_;
+  // Fused YUV readback path (see enableYuv420).
+  ComPtr<ID3D12Resource> yuv_, yuvReadback_;
+  ComPtr<ID3D12DescriptorHeap> yuvHeap_;
+  ComPtr<ID3D12RootSignature> yuvRoot_;
+  ComPtr<ID3D12PipelineState> yuvPso_;
+  uint64_t yuvReadbackBytes_ = 0;
+  int yuvBits_ = 0;  // 8 = compact four-samples-per-uint layout, 10 = 16-bit lanes
+  uint32_t yuvChromaWidth_ = 0, yuvChromaHeight_ = 0;
+  D3D12_RESOURCE_STATES yuvState_ = D3D12_RESOURCE_STATE_COMMON;
+  struct YuvParams {
+    uint32_t width, height, chromaWidth, chromaHeight;
+    float kr, kg, kb;
+    float lumaOffset, lumaScale, chromaOffset, chromaScale, maxValue;
+  } yuvParams_{};
+  // Shared-texture bridge (see enableSharedTextures).
+  ComPtr<ID3D12Resource> shareIn_[2], shareOut_;
+  // D3D12 OpenSharedHandle is expensive; the D3D11 side keeps these handles
+  // alive for the whole session, so one D3D12 resource per handle is enough.
+  std::unordered_map<void*, ComPtr<ID3D12Resource>> shareInputCache_;
+  std::unordered_map<void*, ComPtr<ID3D12Resource>> shareOutputCache_;
+  D3D12_RESOURCE_STATES shareInState_[2] = {D3D12_RESOURCE_STATE_COMMON,
+                                            D3D12_RESOURCE_STATE_COMMON};
+  D3D12_RESOURCE_STATES shareOutState_ = D3D12_RESOURCE_STATE_COMMON;
+  ComPtr<ID3D12DescriptorHeap> shareHeap_;
+  ComPtr<ID3D12RootSignature> shareRoot_;
+  ComPtr<ID3D12PipelineState> shareInPso_, shareOutPso_, shareLumaPso_;
+  int shareBits_ = 0;
+  struct ShareParams {
+    uint32_t width, height, chromaWidth, chromaHeight;
+    float lumaOffset, lumaScale, chromaOffset, chromaScale;
+    float kr, kg, kb, maxValue;
+  } shareParams_{};
+
   D3D12_PLACED_SUBRESOURCE_FOOTPRINT colorFootprint_{};
   D3D12_PLACED_SUBRESOURCE_FOOTPRINT depthFootprint_{};
   D3D12_PLACED_SUBRESOURCE_FOOTPRINT motionFootprint_{};

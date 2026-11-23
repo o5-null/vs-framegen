@@ -1,6 +1,6 @@
 # 用 OSD 改 vpy 参数：可行性与做法
 
-问题：能不能在 mpv 里用 OSD 界面调 `MEMC_DLSSG_NV.vpy` 这类补帧脚本的 `Multi/Scene/Pre_H/Log`，让 vpy 读到界面上改的值？
+问题：能不能在 mpv 里用 OSD 界面调 `MEMC_DLSSG_NV.vpy` 这类补帧脚本的 `Multi/Scene/Pre_H/Preset/Log`，让 vpy 读到界面上改的值？
 
 结论：**能**，但只有一条通路真正可用——`vf=vapoursynth` 的 `user-data` 子参数 + 改参后重建滤镜。
 mpv 没有任何「把属性实时喂进 vpy」的接口，所有"实时"方案都是自己搭的旁路。下文把四条路逐一判定、给出实现与代价。
@@ -49,18 +49,19 @@ if "scene" in _ud:
 ```
 
 优先级：**脚本字面量 < 环境变量 `<VDLSSG_*>` < `user-data`**。键名不分大小写，分隔符 `;` / `,` / 空格都可以。
-VFG 固定 2×、FSR4 固定 2× 所以只认 `scene/pre_h/gpu/log`（FSR4 另有 `camera`）。
+VFG 固定 2×、FSR4 固定 2× 所以只认 `scene/pre_h/gpu/log`（FSR4 另有 `camera`）；`preset` 只有 DLSSG 认，
+其它脚本收到会忽略。
 
 ### 3.2 mpv 侧：`vs-dlssg/mpv/k7f_vpypar.lua`
 
 一个脚本完成「OSD 菜单 → 改状态 → 重建滤镜」：
 
-- 状态：`multi / scene / pre_h / log` 四组候选值，落盘到 `~~/_cache/k7f_vpypar.json`，下次启动沿用。
+- 状态：`multi / preset / scene / pre_h / log` 五组候选值（`preset` 仅对 DLSSG 生效，候选 `A` / `C · FG Lite`），落盘到 `~~/_cache/k7f_vpypar.json`，下次启动沿用。
 - OSD 菜单：`mp.input.select()` 两级列表（主菜单显示「名称：当前值」，选中进候选值列表），选完立刻重建并回到主菜单。
 - 重建就是一条命令：
 
   ```lua
-  vf append @VDLSSG:vapoursynth="<脚本绝对路径>":user-data="multi=4;scene=0.35;pre_h=0;log=0"
+  vf append @VDLSSG:vapoursynth="<脚本绝对路径>":user-data="multi=4;preset=c;scene=0.35;pre_h=0;log=0"
   ```
 
   同名标签会整条替换，**一次链更新、只重建这一条滤镜**，其它滤镜（`format`、着色器等）不受影响。
@@ -113,7 +114,8 @@ VFG 固定 2×、FSR4 固定 2× 所以只认 `scene/pre_h/gpu/log`（FSR4 另�
 |---|---|
 | 启动 `user-data="multi=3;scene=0.25"` | `multi=3 scene=0.25 ud='multi=3;scene=0.25'` |
 | 状态文件里是 4×，命令行给的是 3× | 启动后自愈重建为 `multi=4`（观察者发现 ud 与状态不符） |
-| `set multi 5` | `multi=5 scene=0.25 ud='multi=5;scene=0.25;pre_h=0;log=0'` |
+| `set multi 5` | `multi=5 scene=0.25 ud='multi=5;preset=a;scene=0.25;pre_h=0;log=0'` |
+| `set preset c` | `preset=c ud='multi=5;preset=c;scene=0.25;pre_h=0;log=0'`；插件日志 `preset_pinned … preset_id:3, lite_effective:1` |
 | `set scene 0.35` | `multi=5 scene=0.35 …` |
 | 模拟点预设（挂一个无标签、无 user-data 的滤镜） | 先 `multi=3 ud=''`（插件默认），随即被认领重建为 `multi=5 scene=0.35` |
 | 真引擎（mpv-lazy 配置 + vdlssg.dll） | `[vdlssg] frame 1/3/5… slot …` 按 2× 出帧；`set multi 4` 后按 4× 出帧（207/210/211/213…），seek 之后仍是 4× |

@@ -33,6 +33,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -423,8 +424,11 @@ const VSFrame* VS_CC getFrame(int n, int activationReason, void* instanceData, v
   applyTimelineProps(vsapi, out, a, slot, mult, data->outFpsNum, data->outFpsDen);
   markFrame(out, vsapi, 1, 0, 0, slot);
   if (data->log) {
-    std::fprintf(stderr, "[" FG_NS "] frame %d from %d/%d slot %d/%d: %.2f ms\n", n, srcA, srcA + 1,
-                 slot, mult - 1, result.evaluateMs);
+    std::fprintf(stderr,
+                 "[" FG_NS "] frame %d from %d/%d slot %d/%d: %.2f ms (up %.2f rb %.2f gpu %.2f "
+                 "cp %.2f wall %.2f)\n",
+                 n, srcA, srcA + 1, slot, mult - 1, result.evaluateMs, result.uploadMs,
+                 result.readbackMs, result.gpuMs, result.copyMs, result.wallMs);
   }
   releaseInputs();
   return out;
@@ -621,12 +625,48 @@ void VS_CC frameGenCreate(const VSMap* in, VSMap* out, void* userData, VSCore* c
   config.proxyDir = proxyDir;
   config.engine = engine;
   config.log = data->log;
+  err = 0;
+  config.force8Bit = vsapi->mapGetInt(in, "force8bit", 0, &err) != 0 && err == 0;
   if (data->log) {
     const int api = vsapi->getAPIVersion();
-    std::fprintf(stderr, "[%s] core API %d.%d, args: gpu err=%d index=%d auto=%d log=%d\n", FG_NS,
-                 api >> 16, api & 0xffff, err, config.adapterIndex, int(config.adapterAuto),
-                 int(data->log));
+    std::fprintf(stderr, "[%s] core API %d.%d, args: gpu err=%d index=%d auto=%d log=%d force8bit=%d\n",
+                 FG_NS, api >> 16, api & 0xffff, err, config.adapterIndex, int(config.adapterAuto),
+                 int(data->log), int(config.force8Bit));
   }
+  err = 0;
+  // preset: DLSS-G model preset. The proxy pins it while it installs, so the session rewrites the
+  // engine pack's INI before loading it (ngx_session.cpp) and no later call can change it. Parsed
+  // here so a bad value fails before a device exists. B is refused rather than accepted and
+  // silently ignored: it needs inputs this plugin cannot produce.
+  const char* presetArg = vsapi->mapGetData(in, "preset", 0, &err);
+  if (err == 0 && presetArg && *presetArg) {
+    std::string presetText(presetArg);
+    for (char& c : presetText) c = char(std::tolower(static_cast<unsigned char>(c)));
+    const char letter = presetText.size() == 1 ? presetText[0] : '\0';
+    std::string presetError;
+    if (engine != Engine::Dlss) {
+      presetError = "preset only applies to vdlssg (DLSS-G): it is a key in that engine pack's "
+                    "dlssg_sm86.ini";
+    } else if (letter == 'a') {
+      config.preset = 1;
+    } else if (letter == 'c') {
+      config.preset = 3;
+    } else if (letter == 'b') {
+      presetError = "preset b (UI recomposition) is not offered: it needs a HUD-less image plus a "
+                    "UI colour/alpha plane, and this plugin hands DLSS-G one composited frame, so "
+                    "the runtime ignores B and runs as A. Use a or c";
+    } else {
+      presetError = "preset must be \"a\" (default model) or \"c\" (FG Lite), got \"" + presetText + "\"";
+    }
+    if (!presetError.empty()) {
+      vsapi->mapSetError(out, (FG_NS ": " + presetError).c_str());
+      if (data->mvNode) vsapi->freeNode(data->mvNode);
+      delete data;
+      vsapi->freeNode(node);
+      return;
+    }
+  }
+
   err = 0;
   config.camera = int(vsapi->mapGetInt(in, "camera", 0, &err));
   if (err) config.camera = 0;
@@ -672,6 +712,6 @@ VS_EXTERNAL_API(void) VapourSynthPluginInit2(VSPlugin* plugin, const VSPLUGINAPI
                        0, plugin);
   vspapi->registerFunction("FrameGen",
                            "clip:vnode;multi:int:opt;mv:vnode:opt;proxy_dir:data:opt;gpu:int:opt;"
-                           "scene_threshold:float:opt;camera:int:opt;log:int:opt;",
+                           "scene_threshold:float:opt;camera:int:opt;log:int:opt;force8bit:int:opt;preset:data:opt;",
                            "clip:vnode;", frameGenCreate, nullptr, plugin);
 }

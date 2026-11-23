@@ -24,9 +24,10 @@
 | `Scene` | 0.25 | 切镜阈值（三平面 8 采样平均绝对差）。0 关闭；快节奏素材 0.25 起，稳妥 0.35。默认的 0.15 会把 11% 的帧对 hold 成重复帧 |
 | `Gpu` | 0 | 显卡序号 |
 | `Pre_H` | 0 | `>0` 时先把源预缩到该高度再补帧，4K 6× 显存吃紧时可填 1080 |
+| `Preset` | `"a"` | `<a\|c>` DLSS-G 模型预设：`a` 默认模型；`c` = FG Lite（生成帧 GPU 时间约少 13%，HUD/遮挡边缘略软）。插件在装载代理前改写引擎包的 `dlssg_sm86.ini`，进程内固定 |
 | `Log` | False | 每帧向 stderr 打一行 `evaluate` 毫秒数 |
 
-调试覆盖：`VDLSSG_MULTI` / `VDLSSG_SCENE` / `VDLSSG_PRE_H` / `VDLSSG_LOG` 环境变量，优先级高于脚本里的字面量（方便一条命令试不同倍数，不必改文件）。
+调试覆盖：`VDLSSG_MULTI` / `VDLSSG_SCENE` / `VDLSSG_PRE_H` / `VDLSSG_PRESET` / `VDLSSG_LOG` 环境变量，优先级高于脚本里的字面量（方便一条命令试不同倍数，不必改文件）。
 
 ## 3. 与 `MEMC_RIFE_NV.vpy` 的差异
 

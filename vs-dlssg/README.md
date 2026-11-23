@@ -83,6 +83,7 @@ YUV 的颜色编码不做成参数，而是每对从源帧属性里取（mpv 的
 | `mv` | 无 | 可选光流剪辑（RGB，2 或 3 平面，全尺寸或半尺寸）。**实测这颗运行库基本不使用 mvec**（±30 px 常数场只让输出变化 1.5e-4），可以不给 |
 | `scene_threshold` | 0.15 | **只在源帧完全没有 `_SceneChangePrev`/`_SceneChangeNext` 时才用**（会 warning 一次）：相邻帧按 8 像素步长采样的平均绝对亮度差超过它就判切镜、该对直接 hold（RGBS 平均三个通道，YUV 只看亮度平面并按 `_Range` 归一化，两边同为 [0,1] 亮度，阈值含义一致）。快节奏素材建议 0.25–0.35：实测该片 10 s 内 0.15 会 hold 掉 11% 的帧对。上游带切镜属性时（K7sfunc `SCENE_DETECT`、`std.SCDetect`）本参数完全不起作用 |
 | `proxy_dir` | `<DLL 目录>\dlss45` | 引擎包目录，必须含 `version.dll` 与 `dlssg_sm86\` |
+| `preset` | 无（沿用引擎包；出厂为 A） | **仅 vdlssg**：`a` = 历史模型，`c` = FG Lite。装载代理前改写 `<proxy_dir>\dlssg_sm86.ini` 的 `[DLSSG] Preset`，进程内固定（同一进程换值会报错，换预设要另起进程）。静态画面与 `a` 逐像素相同；运动段 PSNR 45.6–48.0 dB，1080p 每生成帧 p50 GPU 时间 −13%、整体 wall −4.5%。`b` 直接报错：它要 HUD-less 画面 + UI 颜色/遮罩，本插件给不出，运行库也只会按 `a` 跑 |
 | `gpu` | 无（自动） | DXGI 适配器序号。不写时跟随 sm86 代理：载入代理后读它 install 记录里的 `selected_luid`，选同一张卡；没有记录就取接显示器的 NVIDIA 卡。多显卡机器上旧的 `gpu=0` 可能正是代理没覆写的那张，会报 `0xbad00002` |
 | `camera` | 0 | 相机类型（0 默认 / 1 第一人称 / 2 第三人称 / 3 工具） |
 | `log` | 0 | 每帧向 stderr 打一行毫秒数 |

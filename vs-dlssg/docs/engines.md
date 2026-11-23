@@ -33,6 +33,7 @@ VFG 比 DLSS-G 慢约 3.5 倍（模型本身重，且每个中间帧要一条独
 | `proxy_dir` | `<DLL 目录>\<引擎包目录>` | 引擎包目录 |
 | `gpu` | 0 | 适配器序号 |
 | `camera` | 0 | DLSS 专有（相机类型），其它引擎忽略 |
+| `preset` | 无（沿用引擎包） | DLSS 专有（`a`/`c`），其它引擎传了会报错；见 `docs\vdlssg-plugin.md` |
 | `log` | 0 | 每帧向 stderr 打一行毫秒数 |
 
 输出属性：`_DLSSGGenerated`、`_DLSSGFallback`、`_DLSSGSceneCut`、`_DLSSGMultiFrameIndex`（名字沿用，四个插件一致）。

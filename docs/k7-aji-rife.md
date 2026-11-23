@@ -28,9 +28,11 @@
 rife_aji.dll         VS 插件（本仓库写的胶水，MIT）
 aji.dll              libaji dispatcher（源码构建）
 aji_trt.dll          后端：CUDA 原生 RIFE 内核 + TensorRT 引擎路径（源码构建）
+aji_trtrtx.dll       可选：TensorRT-RTX 后端（同样含原生内核；-WithTensorRTRTX）
 cudart64_13.dll      CUDA 运行时
-aji-runtime.json     {"format":1,"trt":"trt"}
+aji-runtime.json     {"format":1,"trt":"trt"}（带 RTX 时另有 trtrtx 键）
 trt\                 nvinfer_11.dll 等（NVIDIA 公开包，含 cudart 副本）
+trtrtx\              可选：TensorRT-RTX 运行库（约 230 MB）
 conf\                k7 按模型生成的 rife_only_<code>.conf
 rife\                rife_v4.*.onnx
 ```
@@ -44,12 +46,22 @@ rife\                rife_v4.*.onnx
 - 运行时包校验要求 `trt\` 内有 cudart，只放在 `aji.dll` 旁边会拒绝启动。
 - 扁平布局是为了 k7：`Version()` 同时报插件目录与它探测到的 `aji` 目录（同级 `aji.dll` 或
   下级 `aji\`），k7 优先按这个自报路径找 conf/模型，再退回 `vs-plugins\aji`。
+- 插件自己探测后端（`Version()["backends"]`/`["missing"]`）：只查文件（顺序同 k7：`lib` →
+  `AJI_DIR` → 插件同层/`aji\` → 上级 `vs-plugins\aji`），按 libaji 预载的 DLL 判断能否启动。
+  但 DirectML/Vulkan 永远不会入选：DirectML 要 `ID3D11Device` + 共享 D3D11 纹理
+  （`aji_dml.cpp:2028`），Vulkan 要 `aji_create_vk` 的 `aji_vk_image` 帧（`aji_vk_frames.cpp:24`），
+  本插件只有主机帧 + CUDA context；文件齐全时 `missing` 会说明宿主帧类型不支持。
+- TensorRT-RTX 后端是可选项（`pack.ps1 -WithTensorRTRTX`）：`aji_trtrtx.dll` 与 `aji_trt.dll`
+  一样把 `aji_native` 编进同一个 DLL，只是链接 RTX 运行库；运行库（`tensorrt_rtx_*.dll` + parser，
+  约 230 MB）放 `trtrtx\`，由 `aji-runtime.json` 的 `trtrtx` 键预载。默认包不带它；conf 写
+  `TensorRT-RTX` 时才走这条链，加载失败 dispatcher 会回落 `aji_trt`。
+  conf 的后端不可用时 `Rife()` 自动换后端并写临时 conf，`backend=` 可强制或限定 `conf`。
 
 ## 3. 插件接口
 
 ```python
 core.rife_aji.Rife(clip, conf, rife_model_dir, factor=2, device=0,
-                   matrix=-1, range=-1, scene_prop=1, lib="", fps=25.0)
+                   matrix=-1, range=-1, scene_prop=1, lib="", fps=25.0, backend="")
 ```
 
 | 参数 | 含义 |
@@ -57,8 +69,9 @@ core.rife_aji.Rife(clip, conf, rife_model_dir, factor=2, device=0,
 | `conf` / `rife_model_dir` | RIFE-only conf 与 `rife_v4.*.onnx` 所在目录 |
 | `factor` | 2..16；时间轴 `src = n / factor`、`t = (n % factor) / factor` |
 | `scene_prop` | 1 = 读 `_SceneChangeNext` 传 scene 0/1；0 = 交 libaji 内建检测（-1） |
-| `lib` | `aji.dll` 路径；空则按插件目录 → 同层 `aji\` → PATH 找 |
+| `lib` | `aji.dll` 路径；空则按 k7 顺序探测（`AJI_DIR`、插件同层/`aji\`、上级 `vs-plugins\aji`、PATH） |
 | `fps` | 只喂 conf 的 `chain_1_max_fps` 判定（必须大于源 fps） |
+| `backend` | `""`/`auto` = conf 可用就用、否则按 TensorRT→RTX 回退（DirectML/Vulkan 不可用）；`conf` = 严格按 conf；也可写后端名。换后端时写临时 conf |
 
 - 帧：`phase == 0` 或尾部直接 `copyFrame(a)`；`AJI_SCENE` 时同样输出 `a`。
 - 格式：4:2:0 的 8bit（NV12）或 10bit（P010）；10bit 在收发时做 LSB↔MSB 位移。
@@ -103,7 +116,8 @@ chain_1_rife_model=<code>
   路径这里做不到。1080p 一次往返约 9 MB，相对推理可忽略。
 - 只支持 4:2:0 8/10bit；其他格式先转。
 - 只吃 RIFE-only conf（带超分链的会被拒绝）。
-- `aji_trt.dll` 仍链接 nvinfer，TensorRT 运行时必须在 `trt\` 里（`aji-runtime.json` 指路，
-  别手写 PATH）。
+- `aji_trt.dll` 仍链接 nvinfer（CUDA 原生内核与 TensorRT 后端在**同一个** DLL 里），TensorRT
+  运行时必须在 `trt\` 里（`aji-runtime.json` 指路，别手写 PATH）；缺 `nvinfer_11.dll` 时整个
+  后端加载失败（error 126），即使 conf 只走原生内核。`Version()["missing"]` 会提前指出。
 - 授权：插件 MIT、引擎保留所有权利。仅本机自用时无顾虑；对外分发不要把 libaji 打进包里，
   让使用者自己按 vsaji 的脚本构建。

@@ -21,8 +21,8 @@ pushd "%ROOT%"
 
 rem name=profile pairs; the profile macro is what selects the engine. Each engine links only the
 rem translation units it needs (the NGX ones pull in D3D12; the VFG one is CUDA-only).
-call :build_one vdlssg FG_PLUGIN_VDLSSG "frame_gen.cpp ngx_session.cpp d3d12_ctx.cpp" || goto build_failed
-call :build_one vxessfg FG_PLUGIN_VXESSFG "frame_gen.cpp ngx_session.cpp d3d12_ctx.cpp" || goto build_failed
+call :build_one vdlssg FG_PLUGIN_VDLSSG "frame_gen.cpp ngx_session.cpp d3d12_ctx.cpp nvof_motion.cpp bridge.cpp" || goto build_failed
+call :build_one vxessfg FG_PLUGIN_VXESSFG "frame_gen.cpp ngx_session.cpp d3d12_ctx.cpp nvof_motion.cpp" || goto build_failed
 call :build_one vvfg FG_PLUGIN_VVFG "frame_gen.cpp vfg_session.cpp" || goto build_failed
 rem FSR4 drives smv_fsrfg_bridge.dll over Vulkan: the bridge hands out its shared textures as raw
 rem Vulkan exports (the bundled vkd3d-proton is patched), so the host imports them with Vulkan.
@@ -45,7 +45,7 @@ if not "%EXTRA_INC%"=="" set INC_ARG=/I"%EXTRA_INC%"
 if not "%EXTRA_LIBDIR%"=="" set LIB_ARG=/LIBPATH:"%EXTRA_LIBDIR%" vulkan-1.lib
 echo [build] %NAME%
 if not exist "..\obj\%NAME%" mkdir "..\obj\%NAME%"
-cl /nologo /std:c++17 /utf-8 /EHsc /O2 /MD /arch:AVX2 /W3 /DNDEBUG /D%PROFILE% /DVS_USE_LATEST_API /I"%NGX_SDK%\include" /I"%VS_INCLUDE%" %INC_ARG% ^
+cl /nologo /std:c++17 /utf-8 /EHsc /O2 /MD /arch:AVX2 /W3 /DNDEBUG /D%PROFILE% /DVS_USE_LATEST_API /I"%NGX_SDK%\include" /I"%VS_INCLUDE%" /I"%ROOT%..\third_party\nvof" %INC_ARG% ^
    /Fo:..\obj\%NAME%\ /Fe:..\bin\%NAME%.dll ^
    %SOURCES% ^
    /link /DLL /SUBSYSTEM:WINDOWS ^

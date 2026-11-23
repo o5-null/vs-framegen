@@ -84,8 +84,9 @@ if k7fb:
     k7fb.publish(
         __file__,
         title="DLSSG", engine="vdlssg",
-        params={"multi": Multi, "scene": Scene, "pre_h": Pre_H, "log": Log},
-        summary=f"{Multi}× · 切镜 {Scene:g}",
+        params={"multi": Multi, "scene": Scene, "preset": Preset,
+                "pre_h": Pre_H, "log": Log},
+        summary=f"{Multi}× · 预设 {Preset} · 切镜 {Scene:g}",
         in_info=k7fb.clip_info(video_in, fps=fps_in),
         out_info=k7fb.clip_info(out),
     )
@@ -103,7 +104,7 @@ out.set_output()
 local B = require 'k7f_bridge'
 
 -- 拼下行参数
-local ud = B.build_user_data(state, { "multi", "scene", "pre_h", "log" })
+local ud = B.build_user_data(state, { "multi", "preset", "scene", "pre_h", "log" })
 
 -- 轮询上行报告
 local timer = B.watch_status("~~/vs/MEMC_DLSSG_NV.vpy", 0.5, function(data, path)

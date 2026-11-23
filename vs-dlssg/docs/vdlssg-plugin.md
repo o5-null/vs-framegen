@@ -1,6 +1,6 @@
 # vdlssg — DLSS-G 帧生成 VapourSynth 插件
 
-`core.vdlssg.FrameGen(clip, multi=2, proxy_dir, gpu=0, scene_threshold=0.15, log=0)`
+`core.vdlssg.FrameGen(clip, multi=2, proxy_dir, gpu=0, scene_threshold=0.15, preset=None, log=0)`
 输入 RGBS，输出 N→multi·N（`multi` = 2..6，即每对源帧插 `multi-1` 帧；6× 见
 `docs\vdlssg45-engine.md`）。
 每组 `multi` 帧里槽 0 原样返回源帧，槽 1..multi-1 由 DLSS-G 合成；末组不足时 hold，切镜吐源帧。
@@ -66,6 +66,43 @@
 （平均 27.40 code，比喂 MV 的 5.69 大近五倍）但 VMAF 58.126→57.837、锐度 0.6134→0.6010；
 `camera=3` 与 2 逐位相同。结论：这条通路确实被消费，但消费方向是把更多像素交给 warp 候选，
 画质更差。**默认保持 0**，这个参数只作为取证入口。
+
+## 模型预设 `preset`
+
+`core.vdlssg.FrameGen(clip, multi=2, ..., preset="c")`，取值 `a` 或 `c`；不给就沿用引擎包里的值
+（出厂包是 `a`）。
+
+DLSS-G 的 preset 不是 NGX 参数：sm86 代理在**装载 `version.dll` 时**读引擎包自己的
+`<proxy_dir>\dlssg_sm86.ini` 的 `[DLSSG] Preset`，把 id 钉死在整个进程上（日志 `event:preset_pinned`、
+`hooks.preset_select`），之后任何 API 都改不了。插件因此在 `Impl::init` 里、`loadProxy()` 之前把
+INI 的这一行改写成 `A` 或 `C`，并用命名互斥 `Local\vs-dlssg-preset-ini` 把"改写 + 装载 + 建 feature"
+串起来，避免两个进程互相读到对方的取值。同一进程里后来的 `FrameGen` 只能沿用同一个值，换值直接报错。
+
+| `preset` | 代理日志 | 含义 |
+|---|---|---|
+| `a`（缺省） | `preset_id:1, effective:0, overrode_runtime:false` | 历史模型，与旧版本逐位一致 |
+| `c` | `preset_id:3, lite_effective:1, overrode_runtime:true` | FG Lite：每生成帧 GPU 时间约少 13%，画质略低 |
+
+实测（RTX 3080、1080p、multi=6、sintel 90..113 源帧、各两轮）：`a` wall 6.35 ms/输出帧、GPU 均值
+3.89、p50 3.08；`c` wall 6.05、均值 3.55、p50 2.66。画质：静态段（帧 2/5/8/11/14/17）与 `a`
+**逐像素相同**；运动段 PSNR 45.64–47.95 dB、max|Δ| 0.14–0.18（线性 0..1，约 68% 像素差 >1e-4），
+差异集中在 HUD 与遮挡边缘，与 FG Lite 的设计一致。
+
+`preset="b"`（UI 重组）直接报错，而不是接受后静默降级：它要运行库同时拿到 `pHudless`（无 UI 画面）
+与 `pUI`/`pUIAlpha`（UI 颜色与遮罩），本插件在 `runPass` 里把后缓冲直接当 hudless 交出去、UI 平面
+留空，代理会判 `preset_ineffective`（`"missing":["DLSSG.UI"]`）并按 `a` 跑。成片视频也不存在可分离
+的 UI 层，这条通路要新增三路输入才谈得上，不是预设开关。
+
+**改写发生在引擎包文件里**：跑过一次 `preset="c"` 之后，包里的 INI 就停在 `C`，下次不写 `preset`
+的脚本也会跑 C；恢复默认用 `preset="a"` 跑一次即可。
+
+本机验证（2026-11-23，`test\mf6.vpy` 用环境变量 `VDLSSG_PRESET` 选档，缺省 `a`）：`preset="c"` 跑完
+288 帧 1920x1080（6.61 ms/输出帧），stderr 有 `[vdlssg] DLSS-G preset c (written to the engine pack's
+dlssg_sm86.ini)`，代理日志对应进程 `preset_id:3, lite_effective:1`；`b` 与非法值都以
+`vapoursynth.Error` 退出，INI 不动；再跑一次 `a` 后 INI 回到 `Preset=A`。
+测这套东西时 `.venv\Scripts\vspipe.exe` 在本机报 `VSScript reported error: Python executable and
+library path couldn't be determined`，改用 venv 的 python 直接 `exec` 那个 `.vpy`、取 `out.get_frame(i)`
+循环即可（`vspipe` 只在源脚本读不进来时才需要）。
 
 ## 2026-11-16 修复与验证
 

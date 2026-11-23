@@ -24,9 +24,14 @@
 | `Scene` | 0.25 | 切镜阈值（三平面 8 采样平均绝对差）。0 关闭；快节奏素材 0.25 起，稳妥 0.35。默认的 0.15 会把 11% 的帧对 hold 成重复帧 |
 | `Gpu` | `None` | 显卡序号；`None` 跟随 sm86 代理安装时选中的那张卡（多显卡机器别写死 0，见 `docs\vdlssg-adapter.md`） |
 | `Pre_H` | 0 | `>0` 时先把源预缩到该高度再补帧，4K 6× 显存吃紧时可填 1080 |
+| `Preset` | `"a"` | `<a|c>` DLSS-G 模型预设：`a` 默认模型（历史行为）；`c` = FG Lite，每生成帧 GPU 时间约少 13%，静态画面与 `a` 逐像素相同、HUD/遮挡边缘略软 |
 | `Log` | False | 每帧向 stderr 打一行 `evaluate` 毫秒数 |
 
-调试覆盖：`VDLSSG_MULTI` / `VDLSSG_SCENE` / `VDLSSG_PRE_H` / `VDLSSG_LOG` 环境变量，优先级高于脚本里的字面量（方便一条命令试不同倍数，不必改文件）。
+`Preset` 的机制在插件侧：DLSS-G 的预设不是 NGX 参数，而是引擎包 `<proxy_dir>\dlssg_sm86.ini` 的 `[DLSSG] Preset`，只有装载 `version.dll` 时读一次、钉死在进程上。插件因此在装载前改写这一行，**跑过一次 `c` 之后包里的 INI 就停在 `C`**（下次不写 `preset=` 的脚本也会跑 C），恢复默认用 `preset="a"` 跑一次即可。同一进程内换档只能重建滤镜。细节与实测见 `vs-dlssg\docs\vdlssg-plugin.md` 的「模型预设」一节。
+
+调试覆盖：`VDLSSG_MULTI` / `VDLSSG_SCENE` / `VDLSSG_PRE_H` / `VDLSSG_PRESET` / `VDLSSG_LOG` 环境变量，优先级高于脚本里的字面量（方便一条命令试不同倍数，不必改文件）。
+
+`vf` 的 `user-data` 优先级最高，可以从 mpv 侧传参：`--vf=vapoursynth="~~/vs/MEMC_DLSSG_NV.vpy":user-data="multi=4;scene=0.35;preset=c"`（值里有 `=`/`;` 必须整体加引号）。OSD 菜单调参见 `docs\mpv-osd-vpy-params.md`。
 
 ## 3. 与 `MEMC_RIFE_NV.vpy` 的差异
 
@@ -52,3 +57,54 @@
 | 4K 3840×1632 + `Multi=2` | 端到端约 46 fps 输出，可实时；`Multi=6` 掉到 16 fps 并会随显存压力继续跌 |
 
 画质口径见 `docs\hsr6x-measure.md`：真实 6× 没有真值可比，只能看观感；拿「两帧间隔的中点」当对照时，这颗引擎只比线性 blend 好 3%。
+
+## 6. 播放中改参数
+
+`Multi/Scene/Pre_H/Preset/Log` 可以通过 `vf=vapoursynth` 的 `user-data` 子参数从 mpv 侧传进脚本，配合 `k7f_vpypar.lua` 做 OSD 菜单调参（改完重建该条滤镜，引擎重新初始化；`preset` 换档同样只能靠重建）。
+机制、代价与其它四条通路的可行性判定见 `docs\mpv-osd-vpy-params.md`。
+
+## 7. 算力不足时自动降级（`k7f_memc_guard.lua`）
+
+mpv 本身**没有**「插帧来不及就输出源帧」的开关，纯配置只能选「丢哪种帧」：
+
+| 配置 | 实际行为 | 观感 |
+|---|---|---|
+| `video-sync=audio` + 默认 `framedrop=vo` | 视频按音频时钟，迟到的输出帧在 VO 丢弃（仍要等滤镜算完） | 不漂移，但会周期性顿 |
+| `video-sync=display-resample` | 重采样音频去追视频，音频跟着变慢 | 不丢帧，但声音变慢/变调 |
+| `video-sync=display-resample-vdrop` | 保持音频速度，丢视频帧补漂移 | 比上一条好，仍会顿 |
+| `framedrop=decoder` | 在滤镜**之前**丢帧 | **不要用**：源帧不连续，插值闪烁/鬼影 |
+
+真正有效的是把插帧滤镜整个禁用，让 mpv 直接显示源帧。`portable_config\scripts\k7f_memc_guard.lua`
+就是做这件事：每 0.5 s 采样一次，用两个信号判断「跟不上」——
+
+- `lag = 1 - (Δtime-pos / Δ墙钟) / speed`：播放被拖慢的比例（`display-resample` 下有效）
+- `Δframe-drop-count / Δ墙钟` 与 `Δmistimed-frame-count / Δ墙钟`：每秒丢弃/错过的帧（`audio` 下有效）
+
+连续 3 s 超阈值（默认速度 < 92% 或丢帧 > 5 fps）就 `vf toggle @VDLSSG` 禁用滤镜；
+之后等待 30 s 试探性启用，若再跟不上则退避翻倍（上限 300 s）。用标签切换 `enable`
+标志而不是删除滤镜，参数仍留在 `vf` 列表里，`k7f_vpypar` 的状态不会被清空。
+
+代价：启用/禁用都要重建滤镜链，候选引擎（DLSSG/TensorRT）会重新初始化，切换瞬间
+会卡一下（试探期默认 5 s 内不作判定）。所以阈值不要调得太敏感，否则会在两种状态间反复跳。
+每次切换后脚本还会重置采样基线并静默 `source_grace`（默认 2 s），避免 time-pos 追赶
+旧进度时误报「补帧已关闭但仍不流畅」。
+
+```conf
+# script-opts.conf（可选，默认值已匹配 k7f_vpypar）
+script-opts-append = k7f_memc_guard-enabled=yes
+script-opts-append = k7f_memc_guard-label=VDLSSG
+script-opts-append = k7f_memc_guard-script=~~/vs/MEMC_DLSSG_NV.vpy
+```
+
+```conf
+# input_uosc.conf（可选）
+Ctrl+v  script-binding k7f_memc_guard/toggle
+v       script-binding k7f_memc_guard/status
+```
+
+脚本消息：`on` / `off` / `now`（立即降级，测试用）/ `status`。
+
+> `mpv-playkit\portable_config\` 是上游每日覆盖目录，不能直接加这个脚本；要进发行包
+> 只能走拓展包的 `portable_config/**` 覆盖层，或等上游 K7sfunc 提供同等能力。
+
+
