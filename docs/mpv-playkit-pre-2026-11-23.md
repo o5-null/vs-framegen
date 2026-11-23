@@ -23,7 +23,7 @@
 - 源码：`E:\code\dlssg-vfi\mpv-src`（fork `o5-null/mpv`，remote `fork`），分支 `master`，含 `vf_playkit`（帧倍增原型、EOF drain、outfmt、D3D11 直通桥、`PLAYKIT_PROXY` 预加载、适配器 `#<index>`）。
 - 构建必须带 `-Dvapoursynth=enabled`：`E:\code\dlssg-vfi\build-mpv.sh`（MSYSTEM=CLANG64，`meson setup build-msys --prefix=/clang64 -Dlibmpv=true -Dd3d11=enabled -Dvulkan=enabled -Dshaderc=enabled -Dvapoursynth=enabled`）；依赖包 `mingw-w64-clang-x86_64-vapoursynth 65-8`。
 - 出包：`mpv-src\scripts\package_windows.py`（objdump 递归依赖闭包、平铺 zip、固定时间戳 2020-01-01）。
-- CI：`mpv-src\.github\workflows\playkit-windows.yml`（仅 windows-latest + MSYS2 CLANG64 x64；push tag `playkit-*` 时编译 → 打包 → 发 release）。上游 `build.yml`（多平台矩阵）与 `fuzz.yml` 已在本 fork 删除（`cd313c6`），只留 lint/docs/comment/cleanup。
+- CI：`mpv-src\.github\workflows\playkit-windows.yml`（仅 windows-latest + MSYS2 CLANG64 x64；push `master` 自动构建出 artifact，push tag `playkit-*` 时编译 → 打包 → 发 release）。上游 `build.yml`（多平台矩阵）与 `fuzz.yml` 已在本 fork 删除（`cd313c6`），只留 lint/docs/comment/cleanup。
 - 首个 release：`o5-null/mpv` 的 `playkit-2026.11.23`，资产 `mpv-x86_64-playkit-2026.11.23.zip` 72,519,650 B，sha256 `1f736931960a4d521f73736341a818353afa7b56923cf266daeafba55158cd67`，run 45150619125 全绿。
 - mpv 已 pin 到该资产（`sources.lock.json`），`assemble` 直接用缓存出的 zip。
 - `vf_playkit.c` 只在 `features['d3d-hwaccel']`（win32）分支加入 sources（`mpv-src/meson.build:1439-1444`），非 Windows 不编译，不需要额外 `#ifdef`。
@@ -189,9 +189,16 @@ k7sfunc 1.9.0+pre.7 / `mpv v0.42.0-dev-g1e6a68304`）。
 `vs-framegen-0.2.0.zip` 后，10:08 的 build 已全绿。
 
 另：`E:\code\dlssg-vfi\mpv-winbuild`（shinchiro/mpv-winbuild-cmake 的 fork，
-HEAD `a54f7d8`）对应的 GitHub 仓库 `o5-null/mpv-winbuild-cmake` 现在 404 不存在，
-`gh repo list o5-null` 里也没有；当前发布链不经过它，改用 `playkit-windows.yml`
-的 MSYS2 CLANG64 动态构建 + DLL 闭包平铺。
+HEAD `a54f7d8`）对应的 GitHub 仓库 `o5-null/mpv-winbuild-cmake` 此前已 404 不存在，
+该本地目录已于 2026-11-23 20:30 删除（3 个本地提交 `7e36e1e`/`eccb90d`/`a54f7d8` 随之丢弃，
+共 172 文件 / 375 KB）。现在只保留 `mpv-src` 的 MSYS2 CLANG64 一条构建路径：
+`meson setup` 默认后端就是 ninja（仓库里 `build-msys/build.ninja` 可证），CI 也显式装
+`mingw-w64-clang-x86_64-ninja`，`meson compile -C build-msys` 实际调用 ninja。
+
+自动构建（`506d8e0`）：`playkit-windows.yml` 现在除 tag 外也监听 `push: branches: [master]`，
+每次推到 fork master 都会自动编译打包并上传 artifact；release 仍只在 tag push 时创建。
+`concurrency: playkit-windows-${{ github.ref }}` + `cancel-in-progress: true`，
+连续推多个 commit 只保留最后一次构建。
 
 ## 待办
 
