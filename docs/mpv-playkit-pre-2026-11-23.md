@@ -200,6 +200,42 @@ HEAD `a54f7d8`）对应的 GitHub 仓库 `o5-null/mpv-winbuild-cmake` 此前已 
 `concurrency: playkit-windows-${{ github.ref }}` + `cancel-in-progress: true`，
 连续推多个 commit 只保留最后一次构建。
 
+## libmpv 与依赖裁剪（2026-11-23 20:4x）
+
+- 打包脚本此前只把 `mpv.exe` / `mpv.com` 当种子，`libmpv-2.dll` 一直没进 zip。
+  已在 `scripts/package_windows.py` 的种子里加上 `libmpv-2.dll`（缺失时报错提示
+  `rebuild with -Dlibmpv=true`），本地提交 `7bb4856`。
+- 本地实测（`--build-dir build-msys --msys-bin C:\msys64\clang64\bin`）：
+  126 个文件，raw 192.4 MiB，zip 70.8 MiB，`libmpv-2.dll` 存在。
+- ggml/whisper 为什么删不掉：MSYS2 的 ffmpeg 9.1 用 `--enable-whisper` 编的，
+  `avfilter-12.dll` 的**静态导入表**里有 `ggml-1.dll`、`libwhisper-1.dll`，
+  打包阶段直接删这两个 DLL 会让 mpv 加载失败。`mpv.exe` 还直接导入
+  `libcaca-0.dll` / `libjpeg-8.dll` / `libbluray-4.dll` / `liblcms2-2.dll`。
+  要真正去掉只能自建 ffmpeg（configure 去掉 `--enable-whisper`）。本轮选择了
+  「不动 ffmpeg」，`ggml-1.dll` / `ggml-base-1.dll` / `libwhisper-1.dll`（约 1.3 MB）
+  继续随包发布。
+- 如需瘦身：MSYS2 的 ffmpeg PKGBUILD 在 `MINGW-packages/mingw-w64-ffmpeg/PKGBUILD`，
+  `--enable-whisper` 在 `CARCH != i686` 分支里；照抄它的 configure 参数（只编 shared）、
+  去掉 whisper，再配合 mpv 的 `-Dlibbluray=disabled -Dcaca=disabled -Djpeg=disabled
+  -Dlcms2=disabled`、关掉 x265/aom-enc/svt-av1/rav1e/xvid/lame 等编码器，可把 zip 压到
+  约 50 MB。
+
+## 上游自动同步（`d970efe`）
+
+新增 `.github/workflows/sync-upstream.yml`：每天 UTC 05:00（北京时间 13:00）检查
+`mpv-player/mpv` 的 master，有新提交就把 fork 的 14 个补丁 rebase 到新上游之上，
+`git push --force-with-lease origin master` 推回，再 `gh workflow run playkit-windows.yml`
+显式触发构建（GITHUB_TOKEN 推的提交不会自动触发 workflow）。
+
+- 用 rebase 不用 merge：mpv 的 commit-msg lint 禁止 merge commit。
+- 预期冲突只有一处：本 fork 删掉的 `.github/workflows/build.yml` 上游还在改。
+  脚本对 `build.yml` / `fuzz.yml` 的 `modify/delete` 冲突自动 `git rm` 保留删除；
+  其它文件冲突直接让 job 失败，留给人处理。
+- 权限：`contents: write`（推回）+ `actions: write`（dispatch）。
+- 本地用 Git Bash 跑过同一段脚本：以当前上游 `1eb941f`（`wayland: don't use old
+  viewport after scale changes`）为目标，14 个补丁里只有 `cd313c6` 的 build.yml
+  modify/delete 冲突被自动解掉，rebase 全部成功。本地 master 已同步到该结果。
+
 ## 待办
 
 - `vsaji` 定版后：推 GitHub、发 `dist/aji` release（zip 根 `aji/**`，由 `vsaji/scripts/make-release.py` 生成）、`build.pin --pack vsdlssg --id vsaji`、去 `disable`。
