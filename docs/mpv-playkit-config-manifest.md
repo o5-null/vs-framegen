@@ -130,8 +130,9 @@ CI（`.github/workflows/build.yml`）的流程是 `fetch → assemble → smoke 
 
 - 同时修掉两个 `menu.conf` 渲染缺陷（实测 `menu-data` 才发现）：`select.lua` 只按 `\t+`
   切分、不认 `#` 注释，原来 `# >>> playkit-config:vf` 这类标记与 "本包未启用" 注释全变成了
-  空菜单项（27 项里有 12 条垃圾）。现在标记行一律加 `hidden=true`，未启用的预设保留命令并加
-  `disabled=true`（灰显不可点，标题写明缺什么）。`input_uosc.conf` 是按键表，注释安全，仍是 `#`。
+  空菜单项（27 项里有 12 条垃圾）。现在标记行一律加 `hidden=true`；未启用的预设
+  **整行不生成**（`render_menu` / `render_input` 直接跳过）：这些 vpy 在装配时已被
+  `prune_vpy` 删掉，留着灰条目命令也只会失败，两个文件里都看不到它们。
 - `mpv-src: video/filter/vf_playkit.c` 的相对路径解析改成 "先工作目录、再 mpv.exe 目录"
   （`pk_abs_path` / `pk_exe_relative_exists`）：NGX 只认绝对路径，而工作目录会被快捷方式、
   文件关联改掉，便携包从别处启动时原来找不到 `vs-plugins/vdlssg.dll`。
@@ -139,8 +140,8 @@ CI（`.github/workflows/build.yml`）的流程是 `fetch → assemble → smoke 
 ### 实测（这次是真跑了，不是只看结构）
 
 - 菜单：在 stage 里用 `--config-dir` 指到生成的配置跑 `menu-data` 转储，`items=27`、
-  三对标记均为 `state=hidden`，`原生滤镜` 位于 `VF 滤镜` 与 `着色器` 之间，未启用预设为
-  `state=disabled`。
+  三对标记均为 `state=hidden`，`原生滤镜` 位于 `VF 滤镜` 与 `着色器` 之间
+  （当时未启用预设还渲染成 `state=disabled`；本轮改成整行不生成，见上一条）。
 - 路径回退：把工作目录换成 `E:\code\dlssg-vfi`（不是 stage 目录）再启动 stage 的 `mpv.exe`，
   滤镜照样加载成功并打出 `playkit: D3D11 adapter ... name=NVIDIA GeForce RTX 3080`、
   `playkit: vdlssg bridge ready 3840x1632 nv12 bits=8 multi=2` —— 证明相对路径确实是按 exe
