@@ -126,18 +126,30 @@ local function valid_value(p, val)
     return false
 end
 
+local function find_param(key)
+    for _, p in ipairs(params) do
+        if p.key == key then return p end
+    end
+    return nil
+end
+
 local function load_state()
     local saved = B.read_json(state_path())
 
     -- 兼容旧版逐行 k=v 的状态文件（那时没有 utils.format_json）
+    local text
     if not saved then
-        local text = B.read_text(state_path())
+        text = B.read_text(state_path())
         if text and text ~= '' then
             saved = {}
             for k, v in text:gmatch('([%w_]+)%s*=%s*([^%s]+)') do
                 saved[k] = v
             end
         end
+    end
+    -- 文件在、两种格式都读不出来：别静默退回默认值，不然“改过的参数又变回去了”查不到原因
+    if not saved and text and text ~= '' then
+        msg.warn('参数状态文件读不出来，已按默认值处理：' .. tostring(state_path()))
     end
     saved = saved or {}
 
@@ -183,8 +195,7 @@ local function build_user_data()
     return B.build_user_data(state, ORDER)
 end
 
--- 找到要控制的滤镜：优先同名标签；其次文件名对得上的无标签 vapoursynth
--- （menu.conf 里的裸 `vf set vapoursynth=…` 就是这种）。第二个返回值表示是否为无标签。
+-- 两个 vpy 路径是不是同一个脚本：只比文件名（链里存的是绝对路径，配置里可能是 ~~/）
 local function file_matches(a, b)
     if not a or not b then return false end
     local function norm(p)
@@ -193,17 +204,37 @@ local function file_matches(a, b)
     return norm(a) == norm(b)
 end
 
-local function find_filter()
+-- 收集**所有**指向本 vpy 的条目：标签相同的，或文件名对得上的无标签 vapoursynth。
+-- 正常情况下只有一条；多于一条说明之前有次移除没匹配上（见 apply 里的说明），
+-- 那会让补帧滤镜串联（两条 ×5 = 25 倍，OSD 上就是 600fps），必须合并掉。
+local function find_entries()
     local list = mp.get_property_native('vf') or {}
-    for _, f in ipairs(list) do
-        if f.label == o.label then return f, true end
-    end
-    for _, f in ipairs(list) do
-        if f.name == 'vapoursynth' and f.params
-            and file_matches(f.params.file, o.script) then
-            return f, false
+    local out = {}
+    for i, f in ipairs(list) do
+        local ours = (f.label == o.label)
+            or (f.name == 'vapoursynth' and f.params and file_matches(f.params.file, o.script))
+        if ours then
+            out[#out + 1] = { index = i, filter = f }
         end
     end
+    return list, out
+end
+
+-- user-data 是 "k=v;k=v" 串：键序不同、内容相同的两份设置视为相同。
+-- k7f_multi 会按自己的键序改写这条串，若这里只比字符串就会把“同样设置”当成变化，
+-- 无谓地重建滤镜（每次都重初始化引擎）；两边都在写时还会来回打架。
+local function same_user_data(a, b)
+    if a == b then return true end
+    local pa = B.parse_user_data(a or '')
+    local pb = B.parse_user_data(b or '')
+    local na, nb = 0, 0
+    for _ in pairs(pa) do na = na + 1 end
+    for _ in pairs(pb) do nb = nb + 1 end
+    if na ~= nb then return false end
+    for k, v in pairs(pa) do
+        if tostring(pb[k]) ~= tostring(v) then return false end
+    end
+    return true
 end
 
 -- 正在重建时忽略 vf 属性回调，避免自己触发自己
@@ -224,7 +255,8 @@ local function apply(silent)
     -- 设置变了，旧报告不再对应当前选择；等 vpy 重建后写新报告
     remote = nil
 
-    local f, labeled = find_filter()
+    local list, entries = find_entries()
+    local f = entries[1] and entries[1].filter
     if not f or f.name ~= 'vapoursynth' then
         if not silent then
             mp.osd_message(('参数已保存（滤镜 %s 未启用）：%s'):format(o.label, describe()), 3)
@@ -234,28 +266,51 @@ local function apply(silent)
 
     -- script 可能写成 ~~/vs/…：能解析成绝对路径就用绝对路径
     local script = resolve_path(o.script)
-    local spec = ('@%s:vapoursynth="%s":user-data="%s"'):format(o.label, script, build_user_data())
-    applying = true
-    local err_msg
-    if not labeled then
-        -- 无标签的旧滤镜：按 "name=参数" 精确移除（`vf remove vapoursynth` 单独写不生效），
-        -- 再加带标签的版本；之后所有改参都是单条 append 替换，只重建一次
-        local rm = 'vapoursynth' .. (f.params and f.params.file and ('=' .. f.params.file) or '')
-        local rok, rret = pcall(mp.commandv, 'vf', 'remove', rm)
-        if not rok or rret ~= true then
-            err_msg = '移除旧滤镜失败：' .. tostring(rm)
+    local ud = build_user_data()
+
+    -- 整链重建：剔掉所有指向本 vpy 的旧条目，末尾放一条带标签的新条目。
+    -- 不用 `vf remove <spec>`：它按 name+全部参数做内容匹配，条目只要被别的脚本
+    -- 加过 user-data 就匹配不上，而 mpv 对“没找到”是静默成功——旧条目留在链上，
+    -- 新条目 append 上去就变成两条补帧串联（倍数相乘，×5 变 25 倍 / 600fps）。
+    local chain = {}
+    for _, filter in ipairs(list) do
+        local ours = (filter.label == o.label)
+            or (filter.name == 'vapoursynth' and filter.params
+                and file_matches(filter.params.file, o.script))
+        if not ours then
+            chain[#chain + 1] = filter
         end
     end
-    -- commandv 失败时返回 (false, err)：pcall 的返回值必须一起看，否则错误被吞掉
-    local pok, ret, err = pcall(mp.commandv, 'vf', 'append', spec)
+    local dropped = #list - #chain
+    chain[#chain + 1] = {
+        name = 'vapoursynth',
+        label = o.label,
+        enabled = true,
+        params = { file = script, ['user-data'] = ud },
+    }
+
+    applying = true
+    local ok, err = pcall(mp.set_property_native, 'vf', chain)
     applying = false
-    if not err_msg and (not pok or ret ~= true) then
-        err_msg = ('重建滤镜失败：%s | %s'):format(tostring(ret), tostring(err or spec))
-    end
-    if err_msg then
-        msg.error(err_msg)
+    if not ok then
+        local text = '重建滤镜失败：' .. tostring(err)
+        msg.error(text)
         mp.osd_message('重建滤镜失败，见控制台日志', 3)
         return false
+    end
+
+    -- 兜底复核：mpv 里“命令没生效”常常也是成功返回，改完链后自己数一遍
+    local _, after = find_entries()
+    if #after ~= 1 then
+        local text = ('滤镜链里仍有 %d 条 %s（应为 1 条）'):format(#after, o.label)
+        msg.error(text)
+        mp.osd_message(text, 3)
+        return false
+    end
+    if dropped > 1 then
+        local text = ('清理了 %d 条重复的 %s 滤镜（多条补帧会叠乘倍数）'):format(dropped - 1, o.label)
+        msg.warn(text)
+        mp.osd_message(text, 3)
     end
 
     applied_at = os.time()
@@ -370,13 +425,38 @@ end)
 -- 免得点了预设又回到脚本里的硬编码默认值
 mp.observe_property('vf', 'none', function()
     if applying then return end
-    local f = find_filter()
-    if not f or f.name ~= 'vapoursynth' then
+    local _, entries = find_entries()
+    if #entries == 0 then
+        remote = nil
+        return
+    end
+    -- 多于一条：有旧条目没被清掉（见 apply 的说明），合并成一条
+    if #entries > 1 then
+        msg.warn(('%s 在滤镜链里有 %d 条，合并为一条'):format(o.label, #entries))
+        mp.add_timeout(0.05, function() apply(true) end)
+        return
+    end
+    local f = entries[1].filter
+    if f.name ~= 'vapoursynth' then
         remote = nil
         return
     end
     local ud = f.params and f.params['user-data'] or ''
-    if ud == build_user_data() then return end
+
+    -- 倍数归 k7f_multi 统一管（它的菜单会往 user-data 里写 multi）。链上已经有值
+    -- 时以链为准，否则两边各写各的会陷入“写 3 → 写 5 → 写 3”的无限重建。
+    local p_multi = find_param('multi')
+    local on_chain = B.parse_user_data(ud).multi
+    if p_multi and on_chain ~= nil then
+        on_chain = tostring(on_chain)
+        if valid_value(p_multi, on_chain) and state.multi ~= on_chain then
+            state.multi = on_chain
+            save_state()
+            msg.verbose('倍数以滤镜链为准：' .. on_chain)
+        end
+    end
+
+    if same_user_data(ud, build_user_data()) then return end
     mp.add_timeout(0.05, function() apply(true) end)
 end)
 
