@@ -172,7 +172,52 @@ img->params = cur->params;
 m6 就是每源帧 8 次"提交并等待"（NVOF 1 次 + 转换 2 次 + 重置 1 次 + 5 个索引）。
 把这些 pass 合并进同一条 command list、只在最后等一次 fence，是下一个该做的优化。
 
-## 五、踩到的坑（复测必看）
+## 五、修复 2：生成帧色彩空间 —— "整帧黑一下/白一下"的根因（已提交）
+
+现象：原生滤镜在 6× 下播放时画面持续闪烁，看起来像整帧压暗、局部过曝地交替出现。
+先排除了生成内容本身：`log=yes` 导出的首对 5 张输出帧亮度 124.91 / 124.00 / 123.27 /
+121.02 / 120.60，夹在源帧 124.66 与 118.92 之间，相邻 MAE 2.2-4.5；无 VO 的 VS 路径
+连扫 240 帧也没有 <8 或 >240 的离群帧。因此问题在"生成帧 → 显示"这段。
+
+新增诊断（`PLAYKIT_DSTSTAT=1`，`vf_playkit.c` 的 `pk_luma_stat()`）：把每帧交给 VO 前
+的 NV12 亮度平面 staging 回读，打印 `y/min/max`，同时打印送进 bridge 的两张源纹理。
+修复前（1080p 6×，`--length=20`，3000 输出帧 / 600 对）：
+
+- dst 亮度范围 `min=0 max=234`，而源纹理 `min=31 max=224`（limited 16-235）。
+- 亮场（y≈122）误差很小，暗场误差随亮度线性放大：`src y=37.1 → dst y=24.5`（≈ -12.5），
+  `src y=36.97 → dst 24.45`。这正是 `(v-16)*255/219` 的"二次展开"。
+- 1278/3000 个生成帧与线性插值偏差 >6，且暗部大面积为 0（削黑）、高光被截到纯白。
+
+根因：`vf_playkit` 从未设置视频处理器的色彩空间，`ID3D11VideoProcessor` 用默认值
+（全零 = 播放用途、RGB 全范围入、BT.601 + **full range 0-255** 出），于是 blit 写出的是
+全范围 BT.601 NV12；而修复 1 之后生成帧的参数直接照抄源帧（BT.709 limited），
+VO 再把全范围数据当 limited 展开一次 → 生成帧整体压暗、暗部削黑、高光爆白，
+与正常显示的源帧交替，就是看到的"黑一下/白一下"。
+
+修复（`mpv-src/video/filter/vf_playkit.c`，`pk_update_colorspace()` 每源帧调用一次）：
+
+```c
+D3D11_VIDEO_PROCESSOR_COLOR_SPACE out = {0};
+out.YCbCr_Matrix  = ref->params.repr.sys == PL_COLOR_SYSTEM_BT_601 ? 0 : 1;  // 709
+out.Nominal_Range = ref->params.repr.levels == PL_COLOR_LEVELS_FULL ? 0 : 1;  // 16-235
+ID3D11VideoContext_VideoProcessorSetStreamColorSpace(b->video_ctx, b->vp, 0, &in);
+ID3D11VideoContext_VideoProcessorSetOutputColorSpace(b->video_ctx, b->vp, &out);
+```
+
+（输入侧固定 `RGB_Range=0` 全范围、`YCbCr_Matrix=1`，因为引擎输出的是全范围 RGBA。）
+
+修复同参数复测：
+
+| 指标 | 修复前 | 修复后 |
+| --- | --- | --- |
+| dst 亮度范围 | 0-234（全范围泄漏） | 16-235，与源一致 |
+| 暗场 dst vs 源 | y 24.5 vs 37.1（-12.5） | 一致（首对 121.35 vs 122.13） |
+| 偏离线性插值 >6 的生成帧 | 1278 / 3000 | 69 / 3000（余下均为快速运动下的正常非线性插值） |
+
+吞吐无回退：1080p 6× `--length=60` 单趟 10800 输出帧 / 101.78 s = 106.1 输出 fps
+（修复 1 的差分口径为 100.3 fps，差异来自单趟含启动开销）。
+
+## 六、踩到的坑（复测必看）
 
 1. **残留 mpv 进程会锁死 DLSS-G preset**：
    `vapoursynth.Error: vdlssg: timed out waiting for another process to pin its DLSS-G preset`。
@@ -190,6 +235,8 @@ m6 就是每源帧 8 次"提交并等待"（NVOF 1 次 + 转换 2 次 + 重置 1
 7. **`--frames=N` 是输出帧数**，不是输入帧；要测吞吐用 `--length` + 时间差分。
 8. **`log=yes` 会触发逐帧 staging 回读**（`pk_hash_texture`），1080p 6× 10s 源从 ~22s 拖到 38.7s；
    计时只用 `PLAYKIT_TIMING=1`，别开 `log=yes`。
+9. **`PLAYKIT_DSTSTAT=1`** 会把每帧交给 VO 前的 NV12 亮度统计打出来（每帧一次 staging 回读，
+   同样会拖慢），只在查画面问题时开；解析脚本 `work/bench_npk/dst_pairs.py`、`dst_analyze.py`。
 
 ## 相关文件
 
