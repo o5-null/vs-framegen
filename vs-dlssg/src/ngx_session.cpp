@@ -1915,23 +1915,50 @@ bool NgxSession::generateTexturesMulti(void* prev, void* cur, uint64_t streamId,
     }
   }
 
+  // Stage timing for the texture bridge: the shared path is dominated by submit-and-wait round
+  // trips, so PLAYKIT-style numbers need a per-stage split to show where the wall time goes.
+  const bool trace = getenv("VDLSSG_TIMING") != nullptr;
+  const auto clockNow = [] { return std::chrono::steady_clock::now(); };
+  const auto sinceMs = [](std::chrono::steady_clock::time_point start) {
+    return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
+        .count();
+  };
+  double convPrevMs = 0.0, seedMs = 0.0, convCurMs = 0.0, evalMs = 0.0;
+
   const auto wallStart = std::chrono::steady_clock::now();
   // Seed the history with prev once, then evaluate every intermediate index against cur.
+  const auto tConvPrev = clockNow();
   if (!s.gpu->begin(error)) return false;
   s.gpu->recordConvertInput(0);
   if (!s.gpu->endAndWait(error)) return false;
+  convPrevMs = sinceMs(tConvPrev);
+  const auto tSeed = clockNow();
   if (!s.runPass(true, false, false, false, 1, 1, nullptr, error)) return false;
+  seedMs = sinceMs(tSeed);
 
+  const auto tConvCur = clockNow();
   if (!s.gpu->begin(error)) return false;
   s.gpu->recordConvertInput(1);
   if (!s.gpu->endAndWait(error)) return false;
+  convCurMs = sinceMs(tConvCur);
+  const auto tEval = clockNow();
   for (uint32_t i = 0; i < outCount; ++i) {
     if (!s.gpu->openSharedOutput(outs[i], error)) return false;
     // One reset per pair, then evaluate each intermediate index against the same cur frame.
+    // (Deferring the wait and batching the passes into one list was tried and is wrong: the
+    // conversion dispatch reads output_ after the following evaluate has overwritten it.)
     if (!s.runPass(false, true, false, useMotion, multiFrameCount, i + 1, nullptr, error,
                    true)) {
       return false;
     }
+  }
+  evalMs = sinceMs(tEval);
+  if (trace) {
+    std::fprintf(stderr,
+                 "[vdlssg] multi timing n=%u conv_prev=%.2f seed=%.2f conv_cur=%.2f eval=%.2f "
+                 "(%0.2f/eval) total=%.2f\n",
+                 outCount, convPrevMs, seedMs, convCurMs, evalMs,
+                 outCount ? evalMs / outCount : 0.0, sinceMs(wallStart));
   }
 
   s.lastPairIndex = pairIndex;
