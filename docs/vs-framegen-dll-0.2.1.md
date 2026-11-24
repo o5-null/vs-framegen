@@ -60,9 +60,12 @@
 
 ## mpv-playkit 侧
 
-- `sources.lock.json` 的 5 条（`vs-framegen-dlls` 与 `vsdlssg/engine-dlss45|xessfg|vfg|fsr4`）
-  一起升到 `0.2.1`，sha256 相同 → 构建不再需要 `PLAYKIT_LOCAL_VS_FRAMEGEN_DLLS` 覆盖件；
-- 决策记在 `mpv-playkit/docs/DECISIONS.md` 第 29 条。
+- `sources.lock.json` 里指向该资产的两条（`vs-framegen-dlls` 与合并后的
+  `vsdlssg/engine-framegen`）一起升到 `0.2.1`，sha256 相同 → 构建不再需要
+  `PLAYKIT_LOCAL_VS_FRAMEGEN_DLLS` 覆盖件；
+- 决策记在 `mpv-playkit/docs/DECISIONS.md` 第 29 条；事后把四颗引擎的四条
+  `vsdlssg/engine-*` 组件合并成一条 `engine-framegen`、并把下载缓存改成按 sha256 命名，
+  记在第 30 条。
 
 ## 教训
 
