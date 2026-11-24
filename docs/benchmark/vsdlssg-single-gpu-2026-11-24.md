@@ -122,7 +122,57 @@ mpv.exe --no-config --vo=gpu-next --gpu-api=d3d11 --hwdec=d3d11va --no-audio --u
 4. 若要收掉重配：`vf_playkit` 应保证生成帧的 `mp_image_params` 与源帧完全一致（当前疑似
    逐帧属性不同/未复用输出 params），这是下一个值得修的点。
 
-## 四、踩到的坑（复测必看）
+## 四、修复：生成帧 params 与源帧一致（已提交）
+
+`vf_playkit.c` 里生成帧来自 `av_hwframe_get_buffer()` 的 hw frame pool，
+`mp_image_from_av_frame()` 带的色彩元数据是未设置的默认值：
+
+```
+gen=[1920x816 [0:1] d3d11[nv12] auto/auto/auto/auto/auto CL=unknown ...]
+src=[1920x816 d3d11[nv12] bt.709/bt.709/bt.1886/limited/display CL=mpeg2/4/h264 ...]
+```
+
+mpv 每帧比较 `mp_image_params`，不一致就重建 VO 渲染管线——这就是上面统计到的
+"每源帧一次重配"。修法是在 `process()` 里把生成帧的参数覆盖成源帧的：
+
+```c
+img->params = cur->params;
+```
+
+（`mpv-src` commit `aa03ade`；`PLAYKIT_TIMING=1` 时会打一行 `playkit: params gen=.. src=..` 便于核对。
+复测的 `fix_m6.out` 中 VO 行回到 1 条、重配 0 次，与无滤镜基线一致。）
+
+### 修复后矩阵（同样方法，`work/bench_npk/matrix_fix.ps1`）
+
+| 分辨率 | 无滤镜 | 2× | 4× | 6× |
+| --- | --- | --- | --- | --- |
+| 1280×544 | 175.7 fps | 147.1 fps / 6.80 ms | 132.2 fps / 7.57 ms | 113.0 fps / 8.85 ms |
+| 1920×816 | 176.6 fps | 123.1 fps / 8.13 ms | 116.0 fps / 8.62 ms | 100.3 fps / 9.97 ms |
+| 2560×1088 | 183.6 fps | 124.2 fps / 8.05 ms | 143.1 fps / 6.99 ms | 110.0 fps / 9.09 ms |
+| 3840×1632 | 180.1 fps | 105.9 fps / 9.44 ms | 108.6 fps / 9.21 ms | 103.2 fps / 9.69 ms |
+
+提升幅度（同一配置 2×/4×/6×）：
+
+| 分辨率 | 2× | 4× | 6× |
+| --- | --- | --- | --- |
+| 1280×544 | 84.4 → 147.1（+74%） | 98.4 → 132.2（+34%） | 94.0 → 113.0（+20%） |
+| 1920×816 | 74.4 → 123.1（+65%） | 96.7 → 116.0（+20%） | 88.0 → 100.3（+14%） |
+| 2560×1088 | 68.8 → 124.2（+81%） | 92.2 → 143.1（+55%） | 84.7 → 110.0（+30%） |
+| 3840×1632 | 60.6 → 105.9（+75%） | 80.8 → 108.6（+34%） | 75.7 → 103.2（+36%） |
+
+修复后的源帧容量：1080p 2× 61.5 源 fps、6× 16.7；4K 2× 53.0、6× 17.2 源 fps。
+"2× 比 4× 慢"的反常消失。
+
+剩下的成本仍主要在内层：`PLAYKIT_TIMING` 显示 1080p 6× 的 `copy_wait+process`
+仍是 ~48 ms/源帧（≈8 ms/生成帧），而 VO 残留已降到 ~2.5 ms/输出帧。
+也就是说瓶颈已回到 `vs-dlssg` 的 bridge：`generateTexturesMulti()`
+（`vs-dlssg/src/ngx_session.cpp:1856-1946`）对每个输出索引单独跑一次
+`runPass()`，每次 `runPass()` 内部 `gpu->begin()` + `endAndWait()`
+（`vs-dlssg/src/d3d12_ctx.cpp:1124-1154`，`ExecuteCommandLists` + fence 等待）——
+m6 就是每源帧 8 次"提交并等待"（NVOF 1 次 + 转换 2 次 + 重置 1 次 + 5 个索引）。
+把这些 pass 合并进同一条 command list、只在最后等一次 fence，是下一个该做的优化。
+
+## 五、踩到的坑（复测必看）
 
 1. **残留 mpv 进程会锁死 DLSS-G preset**：
    `vapoursynth.Error: vdlssg: timed out waiting for another process to pin its DLSS-G preset`。
