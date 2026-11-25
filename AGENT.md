@@ -29,6 +29,12 @@
 
 跨仓库的改动要分别提交到各自的仓库；本仓库的 .gitignore 只负责把它们挡在外面，不会被一起提交。
 
+## Python 环境与包管理（uv）
+
+本仓库的虚拟环境与软件包管理一律用 **uv**（`uv venv` / `uv pip install --python …` / `uv run`），
+不要用 `python -m venv`、裸 `pip`、conda 或借用其它项目的 venv；`uv` 已在 PATH（`C:\software\Python312\Scripts\uv.EXE`）。
+新建的环境目录统一叫 `.venv`（或实验用 `.venv*`），都在 .gitignore 里。
+
 ## 测试环境（Python / VapourSynth）
 
 脚本用本仓库自己的 uv 虚拟环境 `.venv`（已被 .gitignore 挡住），不要借用其它项目的 venv：

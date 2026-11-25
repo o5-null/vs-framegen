@@ -15,8 +15,9 @@
 /测试数据/
 # 代理运行目录与中间产物（TRT engine 缓存、日志）
 /work/
-# 测试用的 uv 虚拟环境（vapoursynth + numpy，见 AGENT.md）
+# uv 虚拟环境（vapoursynth + numpy，见 AGENT.md；.venv 为主，.venv* 为实验环境）
 /.venv/
+/.venv*/
 # mpv 源码与构建树（只读参考，体积大）
 /mpv-src/
 /mpv-winbuild/
