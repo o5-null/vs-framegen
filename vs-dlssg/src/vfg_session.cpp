@@ -56,7 +56,8 @@ static_assert(sizeof(VfgImage) == 64 && offsetof(VfgImage, pixels) == 32, "NVCVI
 constexpr int kVfgRgba = 6, kVfgU8 = 1, kVfgRgb10a2 = 13, kVfgP32 = 11;
 constexpr unsigned kVfgInterleaved = 0, kVfgCuda = 1;
 // The model ships two weights sets: the high tier and a smaller one (the DLL calls it small/medium) that
-// also has fp8 kernels. Mode picks the tier: 0 low, 1 medium, 2 high (the default).
+// also has fp8 kernels. Mode picks the tier: 0 low, 1 medium, 2 high. Medium is the SDK's own default.
+constexpr unsigned kVfgModeMedium = 1;
 constexpr unsigned kVfgModeHigh = 2;
 
 // NvCVImage.dll's descriptor setup: 9 arguments, no explicit component count (the DLL derives it).
@@ -102,6 +103,11 @@ struct CudaApi {
   int (*streamSynchronize)(CUstream) = nullptr;
   int (*memGetInfo)(size_t*, size_t*) = nullptr;
   int (*getErrorName)(int, const char**) = nullptr;
+  // Cross-context sharing of one device allocation (the two source surfaces every lane reads). CUDA IPC is not
+  // usable here: on Windows/WDDM cuIpcOpenMemHandle fails with CUDA_ERROR_INVALID_VALUE even in the context that
+  // exported the handle, so the pair is allocated as managed memory instead, which any context on the device can
+  // address. The data is pushed to the device right before it is read, so it stays resident.
+  int (*memAllocManaged)(CUdeviceptr*, size_t, unsigned) = nullptr;
 
   bool load(std::string& error) {
     if (lib)
@@ -132,6 +138,7 @@ struct CudaApi {
     ok &= get(streamSynchronize, "cuStreamSynchronize");
     ok &= get(memGetInfo, "cuMemGetInfo_v2", "cuMemGetInfo");
     ok &= get(getErrorName, "cuGetErrorName");
+    ok &= get(memAllocManaged, "cuMemAllocManaged");
     if (!ok) {
       error = "nvcuda.dll is missing one of the driver entry points this plugin needs";
       return false;
@@ -515,13 +522,18 @@ struct VfgSession::Impl {
     CUcontext ctx = nullptr;
     CUstream stream = nullptr;
     void* effect = nullptr;
-    CUdeviceptr dev[3] = {};      // source A, source B, and the in-between
-    int64_t cached[2] = {-1, -1}; // source index currently in dev[0] / dev[1]
+    CUdeviceptr src[2] = {};   // the shared source surfaces (managed, so valid in this context too)
+    CUdeviceptr dst = 0;       // this in-between's output surface
   };
 
   std::vector<std::unique_ptr<Lane>> lanes;
-  // Pinned staging shared by the lanes. Every lane uploads the same two source frames, so the packing loop
-  // (one pass over the whole frame) runs once per frame instead of once per lane; two slots cover the pair.
+  // Every lane of a pair reads the same two frames, and a device pointer allocated with cuMemAlloc is only valid
+  // in the context that allocated it. Managed memory has no such owner: one allocation serves every lane, so the
+  // pair is uploaded once instead of once per lane. The model only reads SrcImage0/SrcImage1 (its own state lives
+  // in each lane's context), so sharing the bytes is safe; the packing pass is shared for the same reason.
+  CUdeviceptr shared[2] = {};
+  int64_t sharedIndex[2] = {-1, -1};  // frame currently held by shared[0] / shared[1]
+  int sharedNext = 0;
   unsigned* packed = nullptr;  // 2 x frameBytes
   int64_t packedIndex[2] = {-1, -1};
   int packedNext = 0;
@@ -533,11 +545,15 @@ struct VfgSession::Impl {
   std::atomic<uint64_t> nextStream{1};
   bool verbose = false;
   bool eightBit = false;  // RGBA8 instead of RGB10A2 (the SDR path SmoothMyVideo uses for file renders)
-  unsigned mode = kVfgModeHigh;  // model tier: 0 low, 1 medium, 2 high (VFG_MODE overrides)
+  unsigned mode = kVfgModeMedium;  // model tier: 0 low, 1 medium, 2 high (mode= and VFG_MODE override)
   bool timing = false;           // print a per-in-between breakdown on stderr (VFG_TIMING)
+  bool diag = false;             // also unpack twice, to separate the kernel from a cold frame buffer (VFG_DIAG)
 
   ~Impl() {
-    for (auto& lane : lanes) {
+    // The shared sources are managed, so the owner context (lane 0) can release them from any context; the lanes
+    // are still walked backwards so that the pinned staging dies with the context that pinned it.
+    for (size_t i = lanes.size(); i-- > 0;) {
+      Lane* lane = lanes[i].get();
       if (!lane)
         continue;
       CUcontext prev = nullptr;
@@ -546,10 +562,12 @@ struct VfgSession::Impl {
         nvf.destroy(lane->effect);
       if (lane->stream)
         cuda.streamDestroy(lane->stream);
-      for (auto& d : lane->dev)
-        if (d)
-          cuda.memFree(d);
-      if (packed || hostOut) {  // pinned in the first lane's context
+      if (lane->dst)
+        cuda.memFree(lane->dst);
+      if (i == 0) {  // the owner: the shared surfaces and the pinned staging live in this context
+        for (auto& s : shared)
+          if (s)
+            cuda.memFree(s);
         if (packed)
           cuda.memFreeHost(packed);
         if (hostOut)
@@ -641,11 +659,27 @@ struct VfgSession::Impl {
         !eff.step(nvf.setU32(lane.effect, "FrameMultiplier", 0), "the free-time mode", error))
       return false;
     lap("model load");
-    for (auto& d : lane.dev)
-      if (cuda.memAlloc(&d, frameBytes) != 0) {
-        error = "NVIDIA Video Frame Generation: out of device memory for the frame buffers";
-        return false;
+    // The two source surfaces are allocated once, in this first lane's context, and every lane reads them: managed
+    // memory can be addressed from any context on the device.
+    if (!shared[0]) {
+      for (int i = 0; i < 2; i++) {
+        const int alloc = cuda.memAllocManaged(&shared[i], frameBytes, 1 /* CU_MEM_ATTACH_GLOBAL */);
+        if (alloc != 0) {
+          char why[160];
+          std::snprintf(why, sizeof why,
+                        "NVIDIA Video Frame Generation: could not allocate the shared source surfaces "
+                        "(cuMemAllocManaged %d)", alloc);
+          error = why;
+          return false;
+        }
       }
+    }
+    lane.src[0] = shared[0];
+    lane.src[1] = shared[1];
+    if (cuda.memAlloc(&lane.dst, frameBytes) != 0) {
+      error = "NVIDIA Video Frame Generation: out of device memory for the frame buffers";
+      return false;
+    }
     lap("surfaces");
     if (verbose) {
       size_t freeBytes = 0, totalBytes = 0;
@@ -678,10 +712,11 @@ struct VfgSession::Impl {
     return true;
   }
 
-  // Pack one RGBS frame into R10G10B10A2 and send it to a device surface. The packed bytes are kept by frame
-  // number, so the other lanes that need the same frame skip the packing pass. A planar YUV frame is
-  // converted to RGB row by row on the way, which is where the separate RGBS round trip used to be.
-  bool upload(Lane& lane, int slot, int64_t index, const PlaneView& frame, const fg::ColorFormat& format) {
+  // Pack one RGBS frame into R10G10B10A2 and send it to one of the shared source surfaces. The packed bytes are
+  // kept by frame number, so the packing loop runs once per frame; the copy itself then happens once for all
+  // lanes, which is where the per-lane uploads used to cost their bandwidth. A planar YUV frame is converted to
+  // RGB row by row on the way, which is where the separate RGBS round trip used to be.
+  bool upload(int slot, int64_t index, const PlaneView& frame, const fg::ColorFormat& format, CUstream stream) {
     const unsigned w = config.width, h = config.height;
     const size_t pixels = static_cast<size_t>(w) * h;
     unsigned* host = nullptr;
@@ -720,27 +755,29 @@ struct VfgSession::Impl {
         }
       });
     }
-    // The copy and the run that reads it are on the same stream, so the copy needs no wait of its
-    // own: NvVFX_Run is ordered behind it and download() joins the stream before reading hostOut.
-    return cuda.memcpyHtoDAsync(lane.dev[slot], host, frameBytes, lane.stream) == 0;
+    // The copy is joined right here: the other lanes of this pair read the surface from their own contexts, where
+    // this stream's ordering means nothing, so the bytes have to be in place before they run.
+    if (cuda.memcpyHtoDAsync(shared[slot], host, frameBytes, stream) != 0)
+      return false;
+    return cuda.streamSynchronize(stream) == 0;
   }
 
-  // Which of the lane's two source surfaces holds frame `index`, uploading it if neither does.
-  int source(Lane& lane, int64_t index, const PlaneView& frame, const fg::ColorFormat& format,
+  // The slot that holds frame `index`, uploading it when neither does.
+  int source(int64_t index, const PlaneView& frame, const fg::ColorFormat& format, CUstream stream,
              std::string& error) {
-    if (lane.cached[0] == index)
+    if (sharedIndex[0] == index)
       return 0;
-    if (lane.cached[1] == index) {
-      std::swap(lane.cached[0], lane.cached[1]);
-      std::swap(lane.dev[0], lane.dev[1]);
-      return 0;
-    }
-    const int slot = lane.cached[0] == -1 ? 0 : 1;  // slot 1 is the older surface once slot 0 is in use
-    if (!upload(lane, slot, index, frame, format)) {
+    if (sharedIndex[1] == index)
+      return 1;
+    // Both slots can only be full here, and the older one is the frame before this pair, which every lane has
+    // already finished with (requests are serial).
+    const int slot = sharedIndex[0] < 0 ? 0 : (sharedIndex[1] < 0 ? 1 : sharedNext);
+    sharedNext = slot ^ 1;
+    if (!upload(slot, index, frame, format, stream)) {
       error = "NVIDIA Video Frame Generation: uploading a frame to the device failed";
       return -1;
     }
-    lane.cached[slot] = index;
+    sharedIndex[slot] = index;
     return slot;
   }
 
@@ -756,15 +793,15 @@ struct VfgSession::Impl {
     if (cuda.ctxPushCurrent(lane.ctx) != 0)
       return fail(error, "the CUDA context could not be bound");
     const double t0 = timing ? nowMs() : 0.0;
-    const int a = source(lane, pair, prev, format, error);
-    const int b = a < 0 ? -1 : source(lane, pair + 1, cur, format, error);
+    const int a = source(pair, prev, format, lane.stream, error);
+    const int b = a < 0 ? -1 : source(pair + 1, cur, format, lane.stream, error);
     const double t1 = timing ? nowMs() : 0.0;
     if (b < 0) {
       cuda.ctxPopCurrent(&prevCtx);
       return false;
     }
     const float t = static_cast<float>(index) / static_cast<float>(count + 1);
-    const bool ran = run(lane.effect, lane.dev[a], lane.dev[b], lane.dev[2], t, error);
+    const bool ran = run(lane.effect, lane.src[a], lane.src[b], lane.dst, t, error);
     const double t2 = timing ? nowMs() : 0.0;
     const bool ok = ran && download(lane, out, format);
     if (ok && timing)
@@ -806,16 +843,22 @@ struct VfgSession::Impl {
   // caller asked for YUV back (chroma is the average of the subW x subH block).
   bool download(Lane& lane, const PlaneSink& out, const fg::ColorFormat& format) {
     const double t0 = nowMs();
-    if (cuda.memcpyDtoHAsync(hostOut, lane.dev[2], frameBytes, lane.stream) != 0)
+    if (cuda.memcpyDtoHAsync(hostOut, lane.dst, frameBytes, lane.stream) != 0)
       return false;
     if (cuda.streamSynchronize(lane.stream) != 0)
       return false;
     const double t1 = nowMs();
     // The wait covers the copy and the model (NvVFX_Run only enqueues), so VFG_TIMING reports it
-    // apart from the unpack, which is the host's own share.
-    const auto report = [&]() {
-      if (timing)
-        std::fprintf(stderr, "[vvfg] stage wait=%6.2f unpack=%6.2f ms\n", t1 - t0, nowMs() - t1);
+    // apart from the unpack, which is the host's own share. VFG_DIAG unpacks the surface a second
+    // time into the now warm output plane: the two numbers separate the kernel's cost from first
+    // touching a frame buffer VapourSynth has just handed out.
+    const auto report = [&](double unpackMs, double repeatMs) {
+      if (!timing) return true;
+      if (repeatMs < 0.0)
+        std::fprintf(stderr, "[vvfg] stage wait=%6.2f unpack=%6.2f ms\n", t1 - t0, unpackMs);
+      else
+        std::fprintf(stderr, "[vvfg] stage wait=%6.2f unpack=%6.2f repeat=%6.2f ms\n", t1 - t0,
+                     unpackMs, repeatMs);
       return true;
     };
     const unsigned w = config.width, h = config.height;
@@ -824,14 +867,24 @@ struct VfgSession::Impl {
       unpackRow(hostOut + static_cast<size_t>(y) * w, r, g, b, w, eightBit);
     };
     if (!format.isYuv()) {
-      parallelRows(h, [&](uint32_t y0, uint32_t y1) {
-        for (unsigned y = y0; y < y1; y++) {
-          unpackRowFn(y, reinterpret_cast<float*>(out.data[0] + static_cast<ptrdiff_t>(y) * out.stride[0]),
-                      reinterpret_cast<float*>(out.data[1] + static_cast<ptrdiff_t>(y) * out.stride[1]),
-                      reinterpret_cast<float*>(out.data[2] + static_cast<ptrdiff_t>(y) * out.stride[2]));
-        }
-      });
-      return report();
+      const auto pass = [&]() {
+        parallelRows(h, [&](uint32_t y0, uint32_t y1) {
+          for (unsigned y = y0; y < y1; y++) {
+            unpackRowFn(y, reinterpret_cast<float*>(out.data[0] + static_cast<ptrdiff_t>(y) * out.stride[0]),
+                        reinterpret_cast<float*>(out.data[1] + static_cast<ptrdiff_t>(y) * out.stride[1]),
+                        reinterpret_cast<float*>(out.data[2] + static_cast<ptrdiff_t>(y) * out.stride[2]));
+          }
+        });
+      };
+      pass();
+      const double unpackMs = nowMs() - t1;
+      double repeatMs = -1.0;
+      if (diag) {
+        const double t2 = nowMs();
+        pass();
+        repeatMs = nowMs() - t2;
+      }
+      return report(unpackMs, repeatMs);
     }
     fg::YuvRowWriter writer;
     writer.bind(out, format, int(w), int(h));
@@ -854,7 +907,7 @@ struct VfgSession::Impl {
         writer.writeBlock(int(cy), rows, count);
       }
     });
-    return report();
+    return report(nowMs() - t1, -1.0);
   }
 };
 
@@ -883,13 +936,15 @@ VfgSession* VfgSession::acquire(const Config& config, std::string& error) {
     // mode= on the filter is the knob; VFG_MODE stays as an override for benchmarks that drive one
     // script with several tiers, and wins when set.
     impl->mode = impl->config.quality >= 0 && impl->config.quality <= 2 ? unsigned(impl->config.quality)
-                                                                       : kVfgModeHigh;
+                                                                       : kVfgModeMedium;
     const char* mode = std::getenv("VFG_MODE");
     if (mode && *mode >= '0' && *mode <= '2')
       impl->mode = static_cast<unsigned>(*mode - '0');
     const char* timing = std::getenv("VFG_TIMING");
     impl->timing = timing && *timing && *timing != '0';
-    if (impl->verbose && impl->mode != kVfgModeHigh)
+    const char* diag = std::getenv("VFG_DIAG");
+    impl->diag = diag && *diag && *diag != '0';
+    if (impl->verbose)
       std::fprintf(stderr, "[vvfg] model tier: %s\n", impl->mode == 0 ? "low" : impl->mode == 1 ? "medium" : "high");
   }
   if (!impl->cuda.load(error) || !impl->nvf.open(config.proxyDir, error) || !impl->makeContext(error) ||

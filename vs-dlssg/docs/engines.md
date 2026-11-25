@@ -89,7 +89,7 @@ UseHudless=Auto
 
 DLL 的公开参数里 `Mode (uint32)` 是三档：0 low、1 medium、2 high，包内也确实带两套权重（`model_medium_*`、`model_small_*`，后者另有一套 `_fp8` 变体）。插件原先写死 high。现在：
 
-- 滤镜参数 `mode=0|1|2`，默认 2（high）；`VFG_MODE` 环境变量仍可覆盖，供一次跑多档的基准脚本用。其它引擎不认这个参数，给了会直接报错而不是静默忽略。
+- 滤镜参数 `mode=0|1|2`，默认 1（medium，2026-11-25 夜从 2 改过来，理由见下文《默认值改为 medium》）；`VFG_MODE` 环境变量仍可覆盖，供一次跑多档的基准脚本用。其它引擎不认这个参数，给了会直接报错而不是静默忽略。
 - 实测（1080p sintel Trim 90..113，`test\engine_bench.py` 同源，每输出帧 wall，best-of-3，机器上另有 mpv/MuMu/wallpaper engine 占 GPU，±15% 噪声）：
 
   | multi | high | medium | low |
@@ -117,6 +117,99 @@ DLL 的公开参数里 `Mode (uint32)` 是三档：0 low、1 medium、2 high，�
 「让 5 个 in-between 共享一个 CUDA context 以省掉源帧重复上传」不成立：模型的「上一帧」状态记在 context 上而不是 effect 上（这正是每 lane 一个 context 的原因），同一 context 里第二个 effect 仍会走 pass-through。
 
 于是现状即平台期：high 档受限于模型计算（GPU 20.5 ms/输出帧），medium/low 档受限于每帧 16 MB 的 PCIe 往返；剩下的旋钮只有 `mode=`、`multi`，以及把测量本身挪到空闲 GPU 上。理论可动的量级：medium 档若能把 8 次多余的源帧上传合并起来，还能再省 1–2 ms/输出帧（约 20%），但那需要引擎支持跨 context 的源帧共享或 D2D 拷贝，插件侧做不到。
+（2026-11-25 夜更正：源帧共享已经做成了托管内存方案，「整对批量」在静机器上还没重测；这一节的
+`wait` 里也还混着每个 lane 各自的上传，请看下面三节的最新账本。）
+
+### 显存账本：每条 lane 一份模型（2026-11-25 夜）
+
+显存不是「一张帧缓存」的量级，结构上等于**模型权重 × lane 数**：每条 lane 自己 `cuCtxCreate` 一个 context，
+`NvVFX_Load` 在该 context 里把整套权重加载一遍（这也是模型「上一帧」状态能在 context 里重置的原因）。
+实测（插件 verbose 打印的相邻 `free MiB` 之差，1080p，+1.4 GB 进程基线）：
+
+| 分辨率 | high | medium | low |
+| --- | --- | --- | --- |
+| 480×270 | 622 | 238 | 216 MiB |
+| 720p | 1310 | — | — |
+| 1080p | 1406 | 714 | 354 MiB |
+| 1440p | 1526 | — | — |
+| 2160p | 1828 | — | — |
+| 3840×1632 | 1990 | — | — |
+
+三点结论：
+
+1. 三档在 1080p 约为 4:2:1；480×270 时 high 仍有 622 MiB，说明其中约 0.6 GB（medium/low 约 0.2 GB）
+   是**与分辨率无关的权重 + context 固定开销**，其余才是随分辨率的激活/工作区。
+2. high 档随分辨率强烈次线性（622 → 1990 MiB，面积涨 20 倍、显存只涨 3.2 倍），像是模型内部
+   downscale/分块后的固定网格。
+3. 于是 multi=6 的 5 条 lane：1080p high ≈7 GB（10 GB 卡只剩 ~0.3 GB）、4K ≈10 GB（必爆）；
+   medium ≈3.5 GB。这就是默认档从 high 改成 medium 最硬的理由，和 `fmParallelRequests` 一开就
+   进 WDDM 分页（见上一节）的根因也是同一个。
+
+官方文档（`docs.nvidia.com/maxine/vfx/latest/Filters/VideoFrameGeneration.html`，1.3.0）另外两条硬约束：
+「Only a batch size of 1 is supported」（每次 `Run` 只写 `DstImage0`，调用方必须先取走）、
+「Video Frame Generation is unsupported on RTX 2060 and RTX 3080」——所以 3080 上我们整条路都是
+解锁后的非支持路径，文档也不给任何显存数字。
+
+### 默认值改为 medium（2026-11-25 夜）
+
+`fg_types.h` 的 `Config::quality` 默认 `1`，`test\vfg4.vpy` 用 `VFG_MODE` 默认 1 传 `mode=`，与引擎
+自己的默认档一致。依据（1080p sintel，multi=6，含其它进程 ~1.4 GB 基线显存，`nvidia-smi` 200 ms 采样）：
+
+| 档 | ms/输出帧 | SM util | VRAM used | 功耗 |
+| --- | --- | --- | --- | --- |
+| high | 18.3–19.1 | 83–84% | 7.7 GB | 302 W |
+| medium | 5.5–5.7 | 44–49% | 4.3 GB | 131–177 W |
+| low | 4.3–4.4 | 32% | 2.4 GB | 97–100 W |
+
+medium 只用 2.2 倍速度换 0.4 dB PSNR-Y 与一半显存；而 medium/low 的 SM 占用只有 44%/32%，
+说明**它们已经不是 GPU 受限**，剩下的时间在宿主侧——这正是下一节的内容。
+
+### 现在的瓶颈：GPU 与解包完全串行（2026-11-25 夜）
+
+阶段拆分（`VFG_TIMING=1`，medium，python 串行请求，机器较静，每 tween）：
+
+| 场景 | up（打包+H2D） | `NvVFX_Run` | wait（模型+D2H） | unpack（解包） | 端到端 |
+| --- | --- | --- | --- | --- | --- |
+| 1080p multi=6 | 0.48（p50 0.00，命中缓存即跳过） | 0.36 | 2.90 | 2.13 | 5.3 ms/输出帧 |
+| 1080p multi=4 | 0.78 | 0.35 | 2.96 | 2.09 | 5.3 ms |
+| 1080p multi=2 | 2.22（每帧都要打包） | 0.35 | 3.10 | 2.13 | 5.5 ms |
+| 4K multi=4 | 1.77 | 0.39 | 5.06 | 5.45 | 11.6 ms |
+| 4K multi=2 | 5.06 | 0.35 | 5.00 | 5.34 | 12.6 ms |
+
+- 1080p 一个 in-between 的账：GPU 约 3.0 ms（模型 ~2.3 + D2H 8.3 MB ~0.7），CPU 解包 1.9 ms，
+  两者**完全串行**，所以 5.8 ms 里只有一半在用 GPU（SM 44%）。
+- 4K 更极端：解包 5.4 ms 已经和 wait 持平，宿主侧占比过半；4K 的打包也涨到 5.1 ms（`yuvRowToRgb`
+  的标量转换 + 786 万像素的量化）。
+- 解包内核本身已接近内存带宽上限：独立微基准（1920×1080，10-bit→float×3，60 次/点）用现有
+  AVX2 store 内核是 1 线程 0.90 / 4 线程 0.72 / 8 线程 0.82 / 16 线程 1.01 ms；换成
+  `_mm256_stream_ps` + `_mm256_stream_load_si256` 反而更慢（1.19/1.06/1.01/1.21），所以
+  「非临时存储」不是优化方向。
+- `VFG_DIAG=1` 让 `download` 对同一帧缓冲跑第二遍（已热页驻留）：1080p medium unpack 1.94 /
+  repeat 1.65，high 2.03 / 1.70 ⇒ 首次触碰新页只占 ~0.3 ms（每轮 `VirtualAlloc` 的新提交内存
+  微基准里是 3.2 ms，帧缓冲被复用所以躲过了），其余 1.65 ms 是内核 + 内存流量本身。
+- 由此得到唯一还开着的大收益：把 CPU 解包与下一次 GPU 提交重叠，理论上限
+  `max(3.0, 1.9)`，即 5.3 → ~3.3 ms/输出帧（约 1.6×），4K 约 1.9×。但按帧返回的 API
+  （`fmUnordered`，一次一帧）拿不到跨调用重叠；唯一入口仍是「一对内先算完再交付」，而那条路
+  在上一节里测过是负收益——不过那批数据是在机器被别的进程压着时取的，需要在静机器上重测一次
+  才能定论，不能直接沿用。
+  - 另外：源帧上传的冗余已经消掉了（见下一条），所以「整对批量」现在能省的只剩解包重叠。
+
+### 源帧跨 lane 共享：CUDA IPC 不行，托管内存可以（2026-11-25 夜）
+
+multi=6 时 5 条 lane 原本各持有一份相同的两帧（1080p 每 lane 80 MB 显存、每对 5×8 MB H2D，其中 4 次冗余）。
+
+- CUDA IPC 在 Windows/WDDM 上不可用：探针里 `cuIpcGetMemHandle` 成功，但 `cuIpcOpenMemHandle`
+  flags=0 返回 `1 (CUDA_ERROR_INVALID_VALUE)`、flags=1 返回 `201 (CUDA_ERROR_INVALID_CONTEXT)`，
+  连在导出方自己的 context 里打开也是 1；`cuCtxEnablePeerAccess` 返回 217。
+- `cuMemAllocManaged`（`CU_MEM_ATTACH_GLOBAL`）分配的指针没有 context 归属，UVA 下换 context
+  直接 `cuMemsetD8` 可用（普通 `cuMemAlloc` 的指针跨 context 会返回 1）。
+- 于是改成：lane 0 的 context 里分配两槽托管内存，所有 lane 的 `SrcImage0/1` 都指向它；`upload`
+  只在上传后立刻 `streamSynchronize`（别的 context 读它，本流的顺序没有意义），`source` 用
+  `sharedIndex[2]` 记哪个槽是哪一帧。1080p 显存 80 → 16 MB，每对 5 次上传变 1 次。
+- 收益：medium multi=6 每对少 32 MB H2D，约 0.6 ms/输出帧（8%）；high 档被 20 ms 模型计算掩盖，
+  看不出差别；multi=2 只有一条 lane，本来就没有冗余。
+- 验证：`VFG_TIMING` 里除 lane 0 外其余 lane 的 `up` 都是 0.00，且 1080p 2×/6×、YUV420P10、4K
+  四组逐帧 md5 与共享前完全一致（顺带证明引擎只读 `SrcImage0/1`，不把它当草稿区）。
 
 
 
