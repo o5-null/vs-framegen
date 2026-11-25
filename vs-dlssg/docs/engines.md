@@ -105,6 +105,7 @@ DLL 的公开参数里 `Mode (uint32)` 是三档：0 low、1 medium、2 high，�
 - 宿主侧同时改了两处：`packRow`/`unpackRow` 换成 AVX2 八像素并行（`/arch:AVX2` 本来就是构建底线），`upload` 去掉多余的 `streamSynchronize`（H2D 与 `NvVFX_Run` 在同一个 stream 上，顺序天然保证，join 放在 `download`）。打包耗时 1080p 2.7→2.1 ms、4K 6.5→4.4 ms（4K 剩下的主要是 `yuvRowToRgb` 的标量转换）；端到端在 high 档看不出差别（GPU 占 80%），medium/low 档仍被噪声盖住。
 - 验证：PV 三个时刻 × 三档共 9 帧与旧标量构建**逐字节相同**（max|diff| 0），`mode=` 与 `VFG_MODE` 产出同一帧。另记一条坑：同一进程里重复跑同一个帧对会走 pass-through（模型的新鲜度规则），做档位对比必须每例单独进程。
 - 还能再要的：见下一节——三条结构性路线都试过，全部没有收益。
+- mpv / k7sfunc 侧三条入口都已接上（2026-11-26）：`MEMC_VFG_NV.vpy` 的 `Mode = 1` 字面量、`user-data="mode=2"`、环境变量 `VVFG_MODE`，优先级 `字面量 < VVFG_MODE < user_data`；`k7f_vpypar.lua` 的 OSD 只在 VFG 脚本上多出一行「档位 低/中/高」（按脚本 basename 判断），模块算子 `VFG_NV(mode=0|1|2)` 同理。注意 `mode=0` 是合法值，转发时不能用 `if values[key]` 这种真假判断。
 
 ### 为什么并发和多帧流水都拿不到收益（2026-11-25）
 
