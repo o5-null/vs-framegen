@@ -61,9 +61,14 @@ inline YuvQuant yuvQuant(int bits, bool fullRange) {
   const int maxValue = (1 << bits) - 1;
   q.maxValue = maxValue;
   if (fullRange) {
+    // Full-range chroma is still centred on the sample midpoint (127.5 in 8-bit, 511.5 in 10-bit):
+    // neutral is only at 0 if that offset is subtracted, otherwise every pixel shifts towards
+    // magenta by half a chroma unit.
     q.lumaScale = 1.0f / float(maxValue);
+    q.chromaOffset = float(maxValue) * 0.5f;
     q.chromaScale = q.lumaScale;
     q.lumaOutScale = float(maxValue);
+    q.chromaOutOffset = q.chromaOffset;
     q.chromaOutScale = float(maxValue);
   } else {
     const float step = float(1 << (bits - 8));  // one 8-bit step in samples
