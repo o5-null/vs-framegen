@@ -5,7 +5,7 @@ rem Override with env: NGX_SDK, VS_INCLUDE, VCVARS.
 setlocal
 set ROOT=%~dp0
 
-if "%NGX_SDK%"=="" set NGX_SDK=%ROOT%..\..\ngxsdk
+if "%NGX_SDK%"=="" set NGX_SDK=%ROOT%..\..\repos\ngxsdk
 if "%VS_INCLUDE%"=="" set VS_INCLUDE=E:\code\VFI\.venv\Lib\site-packages\vapoursynth\include
 if "%VCVARS%"=="" set VCVARS=C:\software\msvc\VC\Auxiliary\Build\vcvars64.bat
 if "%VULKAN_SDK%"=="" set VULKAN_SDK=C:\software\Vulkan-sdk

@@ -16,7 +16,7 @@
 | `amd_fidelityfx_framegeneration_dx12.dll`、`amd_fidelityfx_loader_dx12.dll`、`amdxc64.dll` | `bin\fsr4\` | AMD FidelityFX SDK 许可（MIT 式，见包内许可证） | 可以，须附许可与版权声明 | AMD FidelityFX SDK |
 | `smv_vkd3d_d3d12.dll`、`smv_vkd3d_d3d12core.dll`（本地打过 patch） | `bin\fsr4\` | vkd3d-proton，LGPL-2.1 | 可以，但须附 LGPL 文本并提供获取对应源码的途径；patch 已随包（`source\*.patch`） | vkd3d-proton |
 | `dxil-spirv`、`glslang`、`spirv-headers`、`bc-decoder`（编进上面的 DLL） | `bin\fsr4\licenses\` 内有许可文本 | MIT / BSD-3 / CC-BY-4.0 / MIT | 可以，附声明 | 上游仓库 |
-| NGX SDK 头文件与 `nvsdk_ngx_d.lib` | `ngxsdk\`（**不入库**，独立 clone） | NVIDIA RTX SDKs License | 否，仅供构建链接 | `git clone https://github.com/NVIDIA/DLSS ngxsdk` |
+| NGX SDK 头文件与 `nvsdk_ngx_d.lib` | `repos\ngxsdk\`（**不入库**，独立 clone） | NVIDIA RTX SDKs License | 否，仅供构建链接 | `git clone https://github.com/NVIDIA/DLSS repos/ngxsdk` |
 | VapourSynth 头文件 | 构建环境 | LGPL-2.1 | 不随本仓库分发 | VapourSynth |
 
 ## 三条实践结论

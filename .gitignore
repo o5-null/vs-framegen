@@ -1,10 +1,10 @@
-# ── 一起放进来的邻近仓库（各自有 .git，不进本仓库）──────────────
-/k7sfunc/
-/k7sfunc-wiki/
+# ── 统一工作区：子仓库、共享缓存与交付归档（各自有 .git/或本身是产物）──────
+# 子仓库: mpv-playkit / k7sfunc / k7sfunc-wiki / mpv-src / ngxsdk / vsaji
+# 缓存: repos/.cache/downloads；产物: repos/dist（含 0.6–1.7 GB 的档位包）
+/repos/
+# 文档静态页输出（不是仓库）：/k7sfunc-wiki-pages/、/vs-framegen-wiki-pages/
 /k7sfunc-wiki-pages/
 /vs-framegen-wiki-pages/
-/vsaji/
-/mpv-playkit/
 
 # ── 第三方 / 参考 / 大体积素材，不进仓库 ──────────────────────────────
 # 参考插件: SmoothMyVideo 源码与便携版（6 GB，只读参考）
@@ -18,8 +18,8 @@
 # uv 虚拟环境（vapoursynth + numpy，见 AGENT.md；.venv 为主，.venv* 为实验环境）
 /.venv/
 /.venv*/
-# mpv 源码与构建树（只读参考，体积大）
-/mpv-src/
+# mpv 源码与构建树（只读参考，体积大；现放在 repos\mpv-src\）
+# /mpv-src/ 已由上面的 /repos/ 覆盖
 /mpv-winbuild/
 # OSD 参数桥的上行报告（运行时生成）
 *.k7f.json
@@ -52,7 +52,7 @@
 /archive/**/*.dll
 
 # ── NVIDIA SDK（DLSS SDK 是一个独立 git clone；克隆到 ngxsdk\ 或设 NGX_SDK 覆盖）──
-/ngxsdk/
+# /ngxsdk/ 已由上面的 /repos/ 覆盖（克隆位置 repos\ngxsdk）
 
 # ── 媒体素材 ────────────────────────────────────────────────────────
 /media/frames/

@@ -79,7 +79,8 @@ warning 一次。
 | `archive\` | 第一代单引擎 `vdlssg`（已被 `vs-dlssg\src` 取代，仅留对照） | ✓ |
 | `测试数据\` | 源帧、各引擎生成帧、指标（7.5 GB） | ✗ |
 | `参考插件\` `测试环境\` | SmoothMyVideo 源码/便携版、mpv-lazy 测试环境（第三方，只读） | ✗ |
-| `work\` `dist\` `rife\` `rife4k\` `ngxsdk\` | 代理运行目录、引擎解锁包、模型、NVIDIA SDK | ✗ |
+| `work\` `dist\` `rife\` `rife4k\` | 代理运行目录、引擎解锁包、模型 | ✗ |
+| `repos\` | 统一工作区：子仓库（mpv-playkit / k7sfunc / mpv-src / ngxsdk / vsaji / k7sfunc-wiki）、共享缓存 `repos\.cache\downloads\`、交付归档 `repos\dist\` | ✗ |
 
 仓库只有几 MB 源码：生成帧（303 MB）、TRT engine 缓存、引擎包与第三方装包都能重建，不进 git。
 
@@ -92,7 +93,7 @@ cmd /c E:\code\dlssg-vfi\vs-dlssg\src\build.bat
 依赖（可用环境变量覆盖：`NGX_SDK` / `VS_INCLUDE` / `VCVARS` / `VULKAN_SDK`）：
 
 - MSVC x64（`C:\software\msvc\VC\Auxiliary\Build\vcvars64.bat`）
-- NGX SDK：`git clone https://github.com/NVIDIA/DLSS ngxsdk`，构建链 `nvsdk_ngx_d.lib`
+- NGX SDK：`git clone https://github.com/NVIDIA/DLSS repos\ngxsdk`，构建链 `nvsdk_ngx_d.lib`
 - VapourSynth R74+ 头文件（`E:\code\VFI\.venv\Lib\site-packages\vapoursynth\include`）
 - Vulkan SDK（只有 `vfsr4` 用）
 

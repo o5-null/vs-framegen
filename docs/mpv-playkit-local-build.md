@@ -4,9 +4,9 @@
 
 已在本地 MSYS2 CLANG64 环境构建 `o5-null/mpv` fork，`vf_playkit` 以 D3D11 硬件帧完成 6× 复制，PTS 间隔为 `1/180 s`，不依赖 GitHub Actions。
 
-- mpv 源码：`E:\code\dlssg-vfi\mpv-src`
+- mpv 源码：`E:\code\dlssg-vfi\repos\mpv-src`
 - 本地提交：`19694d5 feat(vf): add optional software output format conversion`（在 `4549b1d` 之上，未 push）
-- 二进制：`E:\code\dlssg-vfi\mpv-src\build-msys\mpv.exe`、`mpv.com`、`libmpv-2.dll`
+- 二进制：`E:\code\dlssg-vfi\repos\mpv-src\build-msys\mpv.exe`、`mpv.com`、`libmpv-2.dll`
 - 构建方式：MSYS2（`C:\msys64`，CLANG64）+ Meson/Ninja；脚本 `E:\code\dlssg-vfi\build-mpv.sh`
 
 ## 滤镜行为
