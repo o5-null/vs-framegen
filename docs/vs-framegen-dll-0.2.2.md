@@ -97,12 +97,17 @@ mpv.exe --no-config --hwdec=d3d11va --vo=gpu-next --gpu-context=d3d11 \
 
 ## 发行
 
-- 依赖侧先发 `k7sfunc`：版本号 `1.9.0+pre.9`（`83a830f`，补帧脚本的宿主逻辑进 `mod_vpy`、
-  `[vpy-debug]` 探针之后）；`mpv-playkit` 按 commit 钉这一版。
-- 本仓库 tag `v0.2.2`（`3283f92`）已建，`vs-framegen-0.2.2.zip` 已打包；**push 与 release 上传
-  还没做**（不自动 push）。正文用 `work\release-0.2.2.md`，附件只有 `vs-framegen-0.2.2.zip`。
-- 发版后 `mpv-playkit` 的 `sources.lock.json`（`vs-framegen-dlls` 与 `engine-framegen` 两条）
-  要跟着升到 0.2.2 与新的 sha256，`PLAYKIT_LOCAL_VS_FRAMEGEN_DLLS` 覆盖件才可以撤掉。
+- 依赖侧先发 `k7sfunc`：版本号 `1.9.0+pre.9`（`83a830f`，补齐 `mod_vpy` 宿主层、`[vpy-debug]` 探针
+  与若干修复）已推送到 `o5-null/K7sfunc` main；`mpv-playkit` 按 commit 钉这一版。
+- 本仓库 main 推到 `06a2a01`，tag `v0.2.2` 已推；release
+  <https://github.com/o5-null/vs-framegen/releases/tag/v0.2.2>，附件
+  `vs-framegen-0.2.2.zip`：**253,832,410 B**，
+  `sha256 bfa079362644a532b15be7a1c8796c653f9c7edbfd5d53f0db5e341c8038d289`
+  （GitHub 侧资产 digest 与本地一致）。
+- 发行时的 tag 指向 `06a2a01`；本条记录随后单独提交，所以 main 会在 tag 之后多一个 docs 提交。
+- 下一步（不在本仓库）：`mpv-playkit` 的 `sources.lock.json`（`vs-framegen-dlls` 与
+  `engine-framegen` 两条）升到 0.2.2 与新 sha256、`k7sfunc` 钉到 `83a830f`，
+  `PLAYKIT_LOCAL_VS_FRAMEGEN_DLLS` 覆盖件才可以撤掉。
 
 ## 教训
 
