@@ -36,6 +36,10 @@ mpv 没有任何「把属性实时喂进 vpy」的接口，所有"实时"方案�
 
 ### 3.1 vpy 侧：`_parse_user_data()`
 
+> 本节记录的是改造**之前**的做法（四个脚本各自解析、各自钳制）。现在脚本里只剩用户选项，
+> 解析、钳制、插件定位、主流程与上报都在 `k7sfunc.mod_vpy.FRAMEGEN_VPY` 里，
+> 详见 `docs/vpy-bridge.md`。下面是当时的脚本内实现，保留作为语义参考。
+
 `vs-dlssg/mpv/` 下四个脚本（DLSSG / XESSFG / VFG / FSR4）都在环境变量块之后套了一层 user-data 覆盖。
 解析优先走 `k7f_bridge.py` 的 `parse_user_data()` / `get()`，环境里没有桥文件时才退回脚本内的 12 行手工解析：
 
@@ -85,7 +89,7 @@ VFG 固定 2×、FSR4 固定 2× 所以只认 `scene/pre_h/gpu/log`（FSR4 另�
 
 ## 5. 部署（mpv-lazy）
 
-1. `portable_config\vs\` 放带 `_parse_user_data` 的四个 vpy 和 `k7f_bridge.py`；`portable_config\scripts\` 放 `k7f_vpypar.lua` 与 `k7f_bridge.lua`。
+1. `portable_config\vs\` 放四个 `MEMC_*.vpy`（脚本内置选项，逻辑在 `k7sfunc` 包里）；`portable_config\scripts\` 放 `k7f_vpypar.lua` 与 `k7f_bridge.lua`。
 2. `input_uosc.conf` 加一行键位：
 
    ```
