@@ -85,6 +85,14 @@ UseHudless=Auto
   - 并发上不去：`nvidia-smi` 采样稳态 GPU 占用 70–78%（含装载期 21–44%），把 `VFG_EIGHT_BIT=1`（拷贝字节减半）后耗时 20.36 ms 与 10-bit 的 20.17 ms 持平 —— 说明稳态是模型 GPU 计算受限，不是宿主或带宽受限，多条 lane 并发提交最多填掉那 22% 空档。真正还能省的是「一次算完整对」的批量提交，但它要把 filter 层改成缓存整对的 multi−1 帧，收益预计 <20%（后来实测为负，见下文《为什么并发和多帧流水都拿不到收益》）。
 - 质量校验：`test\vfg_multi_check.py`（`VFG_MULTI=6`，Trim 90..93）逐帧算相邻差，正文 18 帧 delta 0.0010–0.0021 全部不同，无重复帧；末尾 `multi-1` 个 slot hold 最后一帧是框架侧行为，脚本已跳过。
 
+### 用户侧表现：刚挂上滤镜时会卡一下（引擎初始化进显存）
+
+VFG 的每条 lane 都是一个独立 CUDA context，`NvVFX_Load` 要在里面装载模型权重、建好三张设备面，然后才能出第一帧。这部分时间没有任何办法与播放重叠（引擎 API 就是同步装载），所以：
+
+- 第一次挂上滤镜、换 `multi`（lane 数变了）、换分辨率、或者换文件重开进程，都会先卡一段：**medium 每 lane 1.5–2.5 s、high 0.5–0.7 s**（low 1.4–1.9 s），`multi=N` 是 N−1 条 lane 串起来建，1080p 6× medium 首次约 10 s 才出第一张生成帧；之后的帧对不再建 lane，进入稳态。
+- 播放器里看到的就是「开始播放/切滤镜后画面停一两秒（或更久）然后才流畅」，不是掉帧、不是死锁，也不是显存不足；`VFG_TIMING=1` 会把每段建 lane 时间打到 stderr（context / pinned / create / model load / surfaces 五段，见上文档位一节）。
+- 建 lane 的时间几乎全在引擎装载权重（`NvVFX_Load` 一步），与分辨率关系不大，所以缩分辨率救不了这段等待；想让首次卡顿短一些就降档（high 最快建 lane，medium/low 的权重装载慢约 4 倍）。
+
 ### 模型档位 `mode=`（2026-11-25）
 
 DLL 的公开参数里 `Mode (uint32)` 是三档：0 low、1 medium、2 high，包内也确实带两套权重（`model_medium_*`、`model_small_*`，后者另有一套 `_fp8` 变体）。插件原先写死 high。现在：
