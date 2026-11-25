@@ -672,6 +672,29 @@ void VS_CC frameGenCreate(const VSMap* in, VSMap* out, void* userData, VSCore* c
   if (err) config.camera = 0;
   data->camera = config.camera;
 
+  // mode: VFG's model tier, the one quality/speed knob the engine has. 0 low, 1 medium, 2 high (the
+  // default). Only vvfg carries more than one tier, so naming it elsewhere is an error rather than a
+  // value that is silently ignored.
+  err = 0;
+  const int64_t modeArg = vsapi->mapGetInt(in, "mode", 0, &err);
+  if (err == 0) {
+    std::string modeError;
+    if (engine != Engine::Vfg)
+      modeError = std::string("mode only applies to vvfg (VFG), which is the only engine with model "
+                              "tiers; this plugin is ") + engineName(engine);
+    else if (modeArg < 0 || modeArg > 2)
+      modeError = "mode must be 0 (low), 1 (medium) or 2 (high), got " + std::to_string(modeArg);
+    else
+      config.quality = int(modeArg);
+    if (!modeError.empty()) {
+      vsapi->mapSetError(out, (FG_NS ": " + modeError).c_str());
+      if (data->mvNode) vsapi->freeNode(data->mvNode);
+      delete data;
+      vsapi->freeNode(node);
+      return;
+    }
+  }
+
   std::string error;
   data->session = Session::acquire(config, error);
   if (!data->session) {
@@ -712,6 +735,7 @@ VS_EXTERNAL_API(void) VapourSynthPluginInit2(VSPlugin* plugin, const VSPLUGINAPI
                        0, plugin);
   vspapi->registerFunction("FrameGen",
                            "clip:vnode;multi:int:opt;mv:vnode:opt;proxy_dir:data:opt;gpu:int:opt;"
-                           "scene_threshold:float:opt;camera:int:opt;log:int:opt;force8bit:int:opt;preset:data:opt;",
+                           "scene_threshold:float:opt;camera:int:opt;log:int:opt;force8bit:int:opt;preset:data:opt;"
+                           "mode:int:opt;",
                            "clip:vnode;", frameGenCreate, nullptr, plugin);
 }

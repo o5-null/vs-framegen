@@ -16,6 +16,8 @@
 #include <windows.h>
 #include <dxgi.h>
 
+#include <immintrin.h>
+
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -53,6 +55,8 @@ static_assert(sizeof(VfgImage) == 64 && offsetof(VfgImage, pixels) == 32, "NVCVI
 
 constexpr int kVfgRgba = 6, kVfgU8 = 1, kVfgRgb10a2 = 13, kVfgP32 = 11;
 constexpr unsigned kVfgInterleaved = 0, kVfgCuda = 1;
+// The model ships two weights sets: the high tier and a smaller one (the DLL calls it small/medium) that
+// also has fp8 kernels. Mode picks the tier: 0 low, 1 medium, 2 high (the default).
 constexpr unsigned kVfgModeHigh = 2;
 
 // NvCVImage.dll's descriptor setup: 9 arguments, no explicit component count (the DLL derives it).
@@ -428,6 +432,73 @@ void parallelRows(uint32_t height, Fn fn) {
   for (auto& worker : pool) worker.join();
 }
 
+// ---------------------------------------------------------------- pack / unpack kernels
+// The two passes over a whole frame that sit outside the model. Both were scalar; at 4K the pack
+// alone cost ~5 ms, more than a third of a medium-tier in-between. Eight pixels at a time with AVX2
+// (`/arch:AVX2` is already the build's floor) takes the pack to well under a millisecond.
+//
+// float RGB -> R10G10B10A2, or RGBA8 when eightBit. One row, `w` pixels, no padding.
+void packRow(const float* r, const float* g, const float* b, unsigned* out, unsigned w, bool eightBit) {
+  const unsigned max = eightBit ? 255u : 1023u;
+  const unsigned shift = eightBit ? 8u : 10u;
+  const unsigned alpha = eightBit ? 255u : 3u;
+  const unsigned alphaShift = eightBit ? 24u : 30u;
+  const __m256 vmax = _mm256_set1_ps(static_cast<float>(max));
+  const __m256 half = _mm256_set1_ps(0.5f);
+  const __m256 zero = _mm256_setzero_ps();
+  const __m256 one = _mm256_set1_ps(1.0f);
+  const __m256i top = _mm256_set1_epi32(int(max));
+  const __m256i low = _mm256_setzero_si256();
+  // NaN folds to 0 through maxps' second-operand rule, the same as the scalar "not > 0" test.
+  const auto quant = [&](const float* src) {
+    const __m256 v = _mm256_min_ps(_mm256_max_ps(_mm256_loadu_ps(src), zero), one);
+    const __m256i q = _mm256_cvttps_epi32(_mm256_add_ps(_mm256_mul_ps(v, vmax), half));
+    return _mm256_min_epi32(_mm256_max_epi32(q, low), top);
+  };
+  unsigned x = 0;
+  for (; x + 8 <= w; x += 8) {
+    const __m256i qr = quant(r + x), qg = quant(g + x), qb = quant(b + x);
+    __m256i packed = _mm256_or_si256(qr, _mm256_slli_epi32(qg, int(shift)));
+    packed = _mm256_or_si256(packed, _mm256_slli_epi32(qb, int(2 * shift)));
+    packed = _mm256_or_si256(packed, _mm256_set1_epi32(int(alpha << alphaShift)));
+    _mm256_storeu_si256(reinterpret_cast<__m256i*>(out + x), packed);
+  }
+  if (x < w) {
+    const auto scalar = [&](float v) {
+      if (!(v > 0.0f)) return 0u;
+      if (v >= 1.0f) return max;
+      return static_cast<unsigned>(v * static_cast<float>(max) + 0.5f);
+    };
+    for (; x < w; x++)
+      out[x] = scalar(r[x]) | (scalar(g[x]) << shift) | (scalar(b[x]) << (2 * shift)) | (alpha << alphaShift);
+  }
+}
+
+// The inverse: R10G10B10A2 (or RGBA8) -> float RGB.
+void unpackRow(const unsigned* in, float* r, float* g, float* b, unsigned w, bool eightBit) {
+  const unsigned mask = eightBit ? 255u : 1023u;
+  const unsigned shift = eightBit ? 8u : 10u;
+  const __m256i vmask = _mm256_set1_epi32(int(mask));
+  const __m256 scale = _mm256_set1_ps(1.0f / static_cast<float>(mask));
+  unsigned x = 0;
+  for (; x + 8 <= w; x += 8) {
+    const __m256i v = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(in + x));
+    const __m256i cr = _mm256_and_si256(v, vmask);
+    const __m256i cg = _mm256_and_si256(_mm256_srli_epi32(v, int(shift)), vmask);
+    const __m256i cb = _mm256_and_si256(_mm256_srli_epi32(v, int(2 * shift)), vmask);
+    _mm256_storeu_ps(r + x, _mm256_mul_ps(_mm256_cvtepi32_ps(cr), scale));
+    _mm256_storeu_ps(g + x, _mm256_mul_ps(_mm256_cvtepi32_ps(cg), scale));
+    _mm256_storeu_ps(b + x, _mm256_mul_ps(_mm256_cvtepi32_ps(cb), scale));
+  }
+  const float inv = 1.0f / static_cast<float>(mask);
+  for (; x < w; x++) {
+    const unsigned v = in[x];
+    r[x] = static_cast<float>(v & mask) * inv;
+    g[x] = static_cast<float>((v >> shift) & mask) * inv;
+    b[x] = static_cast<float>((v >> (2 * shift)) & mask) * inv;
+  }
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------- session
@@ -462,6 +533,8 @@ struct VfgSession::Impl {
   std::atomic<uint64_t> nextStream{1};
   bool verbose = false;
   bool eightBit = false;  // RGBA8 instead of RGB10A2 (the SDR path SmoothMyVideo uses for file renders)
+  unsigned mode = kVfgModeHigh;  // model tier: 0 low, 1 medium, 2 high (VFG_MODE overrides)
+  bool timing = false;           // print a per-in-between breakdown on stderr (VFG_TIMING)
 
   ~Impl() {
     for (auto& lane : lanes) {
@@ -553,7 +626,7 @@ struct VfgSession::Impl {
     if (!eff.step(nvf.setStream(lane.effect, "CudaStream", lane.stream), "the stream", error) ||
         !eff.step(nvf.setU32(lane.effect, "InputWidth", w), "the width", error) ||
         !eff.step(nvf.setU32(lane.effect, "InputHeight", h), "the height", error) ||
-        !eff.step(nvf.setU32(lane.effect, "Mode", kVfgModeHigh), "the quality mode", error) ||
+        !eff.step(nvf.setU32(lane.effect, "Mode", mode), "the quality mode", error) ||
         !eff.step(nvf.setU32(lane.effect, "AutomaticShotChangeDetectionEnabled", 0), "the shot-change switch", error) ||
         !eff.step(nvf.load(lane.effect), "the model's load", error) ||
         !eff.step(nvf.setU32(lane.effect, "FrameMultiplier", 0), "the free-time mode", error))
@@ -613,13 +686,6 @@ struct VfgSession::Impl {
       const fg::YuvQuant yq = fg::yuvQuant(format.bits, format.fullRange);
       const fg::YuvCoefficients co = fg::yuvCoefficients(format.matrix);
       parallelRows(h, [&](uint32_t y0, uint32_t y1) {
-        const auto quant = [](float v, unsigned max) {
-          if (!(v > 0.0f))
-            return 0u;
-          if (v >= 1.0f)
-            return max;
-          return static_cast<unsigned>(v * static_cast<float>(max) + 0.5f);
-        };
         std::vector<float> rgb(yuv ? static_cast<size_t>(w) * 3 : 0);
         float* ycR = yuv ? rgb.data() : nullptr;
         float* ycG = yuv ? rgb.data() + w : nullptr;
@@ -638,19 +704,14 @@ struct VfgSession::Impl {
             g = reinterpret_cast<const float*>(frame.data[1] + static_cast<ptrdiff_t>(y) * frame.stride[1]);
             b = reinterpret_cast<const float*>(frame.data[2] + static_cast<ptrdiff_t>(y) * frame.stride[2]);
           }
-          unsigned* row = host + static_cast<size_t>(y) * w;
-          for (unsigned x = 0; x < w; x++) {
-            // The model reads the words as R, G, B, A bytes.
-            row[x] = eightBit
-                         ? (quant(r[x], 255u) | (quant(g[x], 255u) << 8) | (quant(b[x], 255u) << 16) | (255u << 24))
-                         : (quant(r[x], 1023u) | (quant(g[x], 1023u) << 10) | (quant(b[x], 1023u) << 20) | (3u << 30));
-          }
+          // The model reads the words as R, G, B, A bytes.
+          packRow(r, g, b, host + static_cast<size_t>(y) * w, w, eightBit);
         }
       });
     }
-    if (cuda.memcpyHtoDAsync(lane.dev[slot], host, frameBytes, lane.stream) != 0)
-      return false;
-    return cuda.streamSynchronize(lane.stream) == 0;
+    // The copy and the run that reads it are on the same stream, so the copy needs no wait of its
+    // own: NvVFX_Run is ordered behind it and download() joins the stream before reading hostOut.
+    return cuda.memcpyHtoDAsync(lane.dev[slot], host, frameBytes, lane.stream) == 0;
   }
 
   // Which of the lane's two source surfaces holds frame `index`, uploading it if neither does.
@@ -683,14 +744,21 @@ struct VfgSession::Impl {
     CUcontext prevCtx = nullptr;
     if (cuda.ctxPushCurrent(lane.ctx) != 0)
       return fail(error, "the CUDA context could not be bound");
+    const double t0 = timing ? nowMs() : 0.0;
     const int a = source(lane, pair, prev, format, error);
     const int b = a < 0 ? -1 : source(lane, pair + 1, cur, format, error);
+    const double t1 = timing ? nowMs() : 0.0;
     if (b < 0) {
       cuda.ctxPopCurrent(&prevCtx);
       return false;
     }
     const float t = static_cast<float>(index) / static_cast<float>(count + 1);
-    const bool ok = run(lane.effect, lane.dev[a], lane.dev[b], lane.dev[2], t, error) && download(lane, out, format);
+    const bool ran = run(lane.effect, lane.dev[a], lane.dev[b], lane.dev[2], t, error);
+    const double t2 = timing ? nowMs() : 0.0;
+    const bool ok = ran && download(lane, out, format);
+    if (ok && timing)
+      std::fprintf(stderr, "[vvfg] tween lane=%u t=%.3f up=%.2f run=%.2f down=%.2f ms\n", index - 1,
+                   static_cast<double>(t), t1 - t0, t2 - t1, nowMs() - t2);
     if (ok && verbose)
       std::fprintf(stderr, "[vvfg] index %u/%u on lane %u at t=%.3f\n", index, count, index - 1,
                    static_cast<double>(t));
@@ -732,27 +800,15 @@ struct VfgSession::Impl {
       return false;
     const unsigned w = config.width, h = config.height;
     // One output row from the packed surface into float RGB, shared by both paths below.
-    const auto unpackRow = [&](unsigned y, float* r, float* g, float* b) {
-      const unsigned* row = hostOut + static_cast<size_t>(y) * w;
-      for (unsigned x = 0; x < w; x++) {
-        const unsigned v = row[x];
-        if (eightBit) {
-          r[x] = static_cast<float>(v & 255u) * (1.0f / 255.0f);
-          g[x] = static_cast<float>((v >> 8) & 255u) * (1.0f / 255.0f);
-          b[x] = static_cast<float>((v >> 16) & 255u) * (1.0f / 255.0f);
-        } else {
-          r[x] = static_cast<float>(v & 1023u) * (1.0f / 1023.0f);
-          g[x] = static_cast<float>((v >> 10) & 1023u) * (1.0f / 1023.0f);
-          b[x] = static_cast<float>((v >> 20) & 1023u) * (1.0f / 1023.0f);
-        }
-      }
+    const auto unpackRowFn = [&](unsigned y, float* r, float* g, float* b) {
+      unpackRow(hostOut + static_cast<size_t>(y) * w, r, g, b, w, eightBit);
     };
     if (!format.isYuv()) {
       parallelRows(h, [&](uint32_t y0, uint32_t y1) {
         for (unsigned y = y0; y < y1; y++) {
-          unpackRow(y, reinterpret_cast<float*>(out.data[0] + static_cast<ptrdiff_t>(y) * out.stride[0]),
-                    reinterpret_cast<float*>(out.data[1] + static_cast<ptrdiff_t>(y) * out.stride[1]),
-                    reinterpret_cast<float*>(out.data[2] + static_cast<ptrdiff_t>(y) * out.stride[2]));
+          unpackRowFn(y, reinterpret_cast<float*>(out.data[0] + static_cast<ptrdiff_t>(y) * out.stride[0]),
+                      reinterpret_cast<float*>(out.data[1] + static_cast<ptrdiff_t>(y) * out.stride[1]),
+                      reinterpret_cast<float*>(out.data[2] + static_cast<ptrdiff_t>(y) * out.stride[2]));
         }
       });
       return true;
@@ -769,7 +825,7 @@ struct VfgSession::Impl {
           const int y = int(cy) * subH + dy;
           if (y >= int(h)) break;
           float* r = rgb.data() + static_cast<size_t>(count) * 3 * static_cast<size_t>(w);
-          unpackRow(unsigned(y), r, r + w, r + static_cast<size_t>(w) * 2);
+          unpackRowFn(unsigned(y), r, r + w, r + static_cast<size_t>(w) * 2);
           rows[count * 3 + 0] = r;
           rows[count * 3 + 1] = r + w;
           rows[count * 3 + 2] = r + static_cast<size_t>(w) * 2;
@@ -804,6 +860,17 @@ VfgSession* VfgSession::acquire(const Config& config, std::string& error) {
   {
     const char* bit8 = std::getenv("VFG_EIGHT_BIT");
     impl->eightBit = bit8 && *bit8 && *bit8 != '0';
+    // mode= on the filter is the knob; VFG_MODE stays as an override for benchmarks that drive one
+    // script with several tiers, and wins when set.
+    impl->mode = impl->config.quality >= 0 && impl->config.quality <= 2 ? unsigned(impl->config.quality)
+                                                                       : kVfgModeHigh;
+    const char* mode = std::getenv("VFG_MODE");
+    if (mode && *mode >= '0' && *mode <= '2')
+      impl->mode = static_cast<unsigned>(*mode - '0');
+    const char* timing = std::getenv("VFG_TIMING");
+    impl->timing = timing && *timing && *timing != '0';
+    if (impl->verbose && impl->mode != kVfgModeHigh)
+      std::fprintf(stderr, "[vvfg] model tier: %s\n", impl->mode == 0 ? "low" : impl->mode == 1 ? "medium" : "high");
   }
   if (!impl->cuda.load(error) || !impl->nvf.open(config.proxyDir, error) || !impl->makeContext(error) ||
       !impl->allocate(error))

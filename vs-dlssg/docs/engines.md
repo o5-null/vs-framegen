@@ -85,6 +85,28 @@ UseHudless=Auto
   - 并发上不去：`nvidia-smi` 采样稳态 GPU 占用 70–78%（含装载期 21–44%），把 `VFG_EIGHT_BIT=1`（拷贝字节减半）后耗时 20.36 ms 与 10-bit 的 20.17 ms 持平 —— 说明稳态是模型 GPU 计算受限，不是宿主或带宽受限，多条 lane 并发提交最多填掉那 22% 空档。真正还能省的是「一次算完整对」的批量提交，但它要把 filter 层改成缓存整对的 multi−1 帧，收益预计 <20%。
 - 质量校验：`test\vfg_multi_check.py`（`VFG_MULTI=6`，Trim 90..93）逐帧算相邻差，正文 18 帧 delta 0.0010–0.0021 全部不同，无重复帧；末尾 `multi-1` 个 slot hold 最后一帧是框架侧行为，脚本已跳过。
 
+### 模型档位 `mode=`（2026-11-25）
+
+DLL 的公开参数里 `Mode (uint32)` 是三档：0 low、1 medium、2 high，包内也确实带两套权重（`model_medium_*`、`model_small_*`，后者另有一套 `_fp8` 变体）。插件原先写死 high。现在：
+
+- 滤镜参数 `mode=0|1|2`，默认 2（high）；`VFG_MODE` 环境变量仍可覆盖，供一次跑多档的基准脚本用。其它引擎不认这个参数，给了会直接报错而不是静默忽略。
+- 实测（1080p sintel Trim 90..113，`test\engine_bench.py` 同源，每输出帧 wall，best-of-3，机器上另有 mpv/MuMu/wallpaper engine 占 GPU，±15% 噪声）：
+
+  | multi | high | medium | low |
+  | --- | --- | --- | --- |
+  | 2 | 14.8 ms | 6.3 ms | 5.7 ms |
+  | 4 | 18.8 ms | 5.9 ms | 4.4 ms |
+  | 6 | 20.7 ms | 5.6 ms | 4.5 ms |
+
+  同口径 DLSS-G 是 multi=6 5.7 ms、multi=2 12.4 ms，即 medium 档在 2× 时反而快近一倍。4K（3840×1632 阿哈 PV，trim 300..323，multi=2）每输出帧：high 51.9 / medium 15.5 / low 12.9 ms。
+- 质量（PV 三个真实中间帧，PSNR / SSIM / 锐度比 GT）：high 33.91 / 0.9765 / 0.512，medium 33.52 / 0.9740 / 0.407，low 32.33 / 0.9692 / 0.427。medium 的代价主要是更软——VFG 本来已是几家里最软的（锐度/GT 0.652），选档时要按这个话题权衡，而不是只看 PSNR。
+- 阶段分解（1080p multi=2，每个 tween）：high 打包 2.2 + `run` 3.1 + 回读 25.0 ≈ 30 ms；medium 2.1 / 0.4 / 7.1 ≈ 9.6 ms；low 2.3 / 0.5 / 4.2 ≈ 7.0 ms。注意 `NvVFX_Run` 只是入队，真正等模型的是 `download` 里的 `streamSynchronize`，所以那 25 ms 是模型本身。
+- 建 lane 变慢：high 0.42–0.68 s，medium 1.6–2.3 s，low 1.4–1.9 s（多出来的像是每次进程内重新编译，未确认）。6× 的首帧尖峰因此从约 2.5 s 涨到约 10 s。
+- 宿主侧同时改了两处：`packRow`/`unpackRow` 换成 AVX2 八像素并行（`/arch:AVX2` 本来就是构建底线），`upload` 去掉多余的 `streamSynchronize`（H2D 与 `NvVFX_Run` 在同一个 stream 上，顺序天然保证，join 放在 `download`）。打包耗时 1080p 2.7→2.1 ms、4K 6.5→4.4 ms（4K 剩下的主要是 `yuvRowToRgb` 的标量转换）；端到端在 high 档看不出差别（GPU 占 80%），medium/low 档仍被噪声盖住。
+- 验证：PV 三个时刻 × 三档共 9 帧与旧标量构建**逐字节相同**（max|diff| 0），`mode=` 与 `VFG_MODE` 产出同一帧。另记一条坑：同一进程里重复跑同一个帧对会走 pass-through（模型的新鲜度规则），做档位对比必须每例单独进程。
+- 还能再要的（未做）：`VfgSession::generate` 全程持全局锁 `impl.lock`，lane 之间因此完全串行；medium/low 档模型只占一个 tween 的 55–60%，把打包/回读和别的 lane 的 GPU 重叠起来才是下一档收益（要做 per-lane `hostOut` + 打包缓存加锁），预计 medium 档 1.5–2×。
+
+
 
 ## AMD FSR 4
 

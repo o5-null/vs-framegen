@@ -149,6 +149,10 @@ struct Config {
   // B (2, UI recomposition) is not offered: it needs a HUD-less image plus a UI colour/alpha plane,
   // which a composed video frame cannot provide, and the runtime then runs as A.
   int preset = 0;
+  // VFG model tier (nvVFX's Mode): 0 low, 1 medium, 2 high. The high tier is the model the DLL ships
+  // as its default; medium and low are the smaller weights sets the pack also carries, ~2.3x / ~2.7x
+  // cheaper per in-between at 1080p and softer (0.4 dB / 1.6 dB PSNR-Y below high on the 4K PV set).
+  int quality = 2;
 };
 
 }  // namespace fg
