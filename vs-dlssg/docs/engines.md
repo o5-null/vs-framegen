@@ -82,7 +82,7 @@ UseHudless=Auto
   - 稳态每个中间帧约 25–40 ms（RTX 3080，10-bit；比 DLSS-G 的 1.4 ms 重一个数量级，这是 VFG 模型本身的成本）。
   - 源帧打包在 lane 之间共享（`vfg_session.cpp` 的 `packed` 两槽缓存 + `packedIndex[2]`）：同一帧只跑一次 RGBS→RGB10A2 循环，省掉 4/5 的打包 CPU 时间，4× 由 4.47 s 降到 3.78 s、6× 由 7.81 s 降到 6.81 s；H2D 次数不变（每个 context 一份自己的显存面，跨 context 不能 D2D）。
   - 打包与回读解包都按行分带并行（`parallelRows`，最多 16 线程，同 `ngx_session.cpp` 的做法）：4× 再降到 1.94 s / 20.17 ms 每输出帧，6× 6.08 s（含 2.9 s 建 lane，稳态约 3.2 s）。`vfg_multi_check.py` 结果不变（`multi=4` 正文 12 帧 delta 0.0020–0.0025，`multi=6` 18 帧 0.0010–0.0021，末尾 hold 帧数正确）。
-  - 并发上不去：`nvidia-smi` 采样稳态 GPU 占用 70–78%（含装载期 21–44%），把 `VFG_EIGHT_BIT=1`（拷贝字节减半）后耗时 20.36 ms 与 10-bit 的 20.17 ms 持平 —— 说明稳态是模型 GPU 计算受限，不是宿主或带宽受限，多条 lane 并发提交最多填掉那 22% 空档。真正还能省的是「一次算完整对」的批量提交，但它要把 filter 层改成缓存整对的 multi−1 帧，收益预计 <20%。
+  - 并发上不去：`nvidia-smi` 采样稳态 GPU 占用 70–78%（含装载期 21–44%），把 `VFG_EIGHT_BIT=1`（拷贝字节减半）后耗时 20.36 ms 与 10-bit 的 20.17 ms 持平 —— 说明稳态是模型 GPU 计算受限，不是宿主或带宽受限，多条 lane 并发提交最多填掉那 22% 空档。真正还能省的是「一次算完整对」的批量提交，但它要把 filter 层改成缓存整对的 multi−1 帧，收益预计 <20%（后来实测为负，见下文《为什么并发和多帧流水都拿不到收益》）。
 - 质量校验：`test\vfg_multi_check.py`（`VFG_MULTI=6`，Trim 90..93）逐帧算相邻差，正文 18 帧 delta 0.0010–0.0021 全部不同，无重复帧；末尾 `multi-1` 个 slot hold 最后一帧是框架侧行为，脚本已跳过。
 
 ### 模型档位 `mode=`（2026-11-25）
@@ -101,10 +101,22 @@ DLL 的公开参数里 `Mode (uint32)` 是三档：0 low、1 medium、2 high，�
   同口径 DLSS-G 是 multi=6 5.7 ms、multi=2 12.4 ms，即 medium 档在 2× 时反而快近一倍。4K（3840×1632 阿哈 PV，trim 300..323，multi=2）每输出帧：high 51.9 / medium 15.5 / low 12.9 ms。
 - 质量（PV 三个真实中间帧，PSNR / SSIM / 锐度比 GT）：high 33.91 / 0.9765 / 0.512，medium 33.52 / 0.9740 / 0.407，low 32.33 / 0.9692 / 0.427。medium 的代价主要是更软——VFG 本来已是几家里最软的（锐度/GT 0.652），选档时要按这个话题权衡，而不是只看 PSNR。
 - 阶段分解（1080p multi=2，每个 tween）：high 打包 2.2 + `run` 3.1 + 回读 25.0 ≈ 30 ms；medium 2.1 / 0.4 / 7.1 ≈ 9.6 ms；low 2.3 / 0.5 / 4.2 ≈ 7.0 ms。注意 `NvVFX_Run` 只是入队，真正等模型的是 `download` 里的 `streamSynchronize`，所以那 25 ms 是模型本身。
-- 建 lane 变慢：high 0.42–0.68 s，medium 1.6–2.3 s，low 1.4–1.9 s（多出来的像是每次进程内重新编译，未确认）。6× 的首帧尖峰因此从约 2.5 s 涨到约 10 s。
+- 建 lane 变慢：high 0.42–0.68 s，medium 1.6–2.3 s，low 1.4–1.9 s。`VFG_TIMING=1` 现在把建 lane 拆成 context / pinned / create / model load / surfaces 五段打印，实测中低档多出来的时间**全部在 `NvVFX_Load` 一步**（high +0.41 s，medium +1.95 s，low +1.53 s），其余四段三档一致（65–124 / 104–129 / 271–342 ms）。把 `CUDA_CACHE_PATH` 指到空目录再跑，目录里仍是 0 个文件，所以不是 PTX JIT 缓存在重建，是引擎自己在装载中低档权重时慢约 4 倍。6× 的首帧尖峰因此从约 2.5 s 涨到约 10 s。
 - 宿主侧同时改了两处：`packRow`/`unpackRow` 换成 AVX2 八像素并行（`/arch:AVX2` 本来就是构建底线），`upload` 去掉多余的 `streamSynchronize`（H2D 与 `NvVFX_Run` 在同一个 stream 上，顺序天然保证，join 放在 `download`）。打包耗时 1080p 2.7→2.1 ms、4K 6.5→4.4 ms（4K 剩下的主要是 `yuvRowToRgb` 的标量转换）；端到端在 high 档看不出差别（GPU 占 80%），medium/low 档仍被噪声盖住。
 - 验证：PV 三个时刻 × 三档共 9 帧与旧标量构建**逐字节相同**（max|diff| 0），`mode=` 与 `VFG_MODE` 产出同一帧。另记一条坑：同一进程里重复跑同一个帧对会走 pass-through（模型的新鲜度规则），做档位对比必须每例单独进程。
-- 还能再要的（未做）：`VfgSession::generate` 全程持全局锁 `impl.lock`，lane 之间因此完全串行；medium/low 档模型只占一个 tween 的 55–60%，把打包/回读和别的 lane 的 GPU 重叠起来才是下一档收益（要做 per-lane `hostOut` + 打包缓存加锁），预计 medium 档 1.5–2×。
+- 还能再要的：见下一节——三条结构性路线都试过，全部没有收益。
+
+### 为什么并发和多帧流水都拿不到收益（2026-11-25）
+
+围绕「把 CPU 的打包/解包藏到别的 lane 的 GPU 时间后面」试了三条路线，都实测否掉，代码已回退，只保留 `VFG_TIMING` 的分段诊断：
+
+1. **lane 并发（去全局锁，per-lane 暂存 + 池化分带线程）**：功能与画质都对（逐帧 md5 与串行构建全同：1080p 2×/6×、YUV420P10、4K 各一例），但收益为零，因为**本插件永远收不到并发请求**。在 `generate` 里数在途调用，python 多线程与 `vspipe -r 6` 下峰值恒为 1：`frame_gen.cpp` 用 `fmUnordered` 注册（同一实例一次只调一帧）。
+2. **改成 `fmParallelRequests` 强开并发**：core 会同时持有多个在途输出帧，10 GB 卡上 5 条 lane ×1.4 GB 直接进 WDDM 分页，1080p 6× medium 从 9 ms 变成 ~700 ms（130 帧 91.75 s → 274 s），用户侧表现为显存爆掉、卡顿。已改回。
+3. **整对下发 / 两帧流水（一次把所有 in-between 排进各自 lane 再逐个回读，或回读完一帧再补发一帧）**：high 档 multi=6 从 20.5 ms 变成 22.7 ms（稳定复现 5 次，慢 10%），medium 档 6.09 → 6.03（噪声内）。原因是 high 档 GPU 已饱和，多 context 同时跑反而切碎 SM 与缓存局部性；medium 档的 `wait`（3.4 ms）主要是每条 lane 各自上传同一个源帧（每对 10 次 8 MB H2D 走同一条 PCIe），重叠不解带宽。
+
+「让 5 个 in-between 共享一个 CUDA context 以省掉源帧重复上传」不成立：模型的「上一帧」状态记在 context 上而不是 effect 上（这正是每 lane 一个 context 的原因），同一 context 里第二个 effect 仍会走 pass-through。
+
+于是现状即平台期：high 档受限于模型计算（GPU 20.5 ms/输出帧），medium/low 档受限于每帧 16 MB 的 PCIe 往返；剩下的旋钮只有 `mode=`、`multi`，以及把测量本身挪到空闲 GPU 上。理论可动的量级：medium 档若能把 8 次多余的源帧上传合并起来，还能再省 1–2 ms/输出帧（约 20%），但那需要引擎支持跨 context 的源帧共享或 D2D 拷贝，插件侧做不到。
 
 
 

@@ -710,6 +710,12 @@ void VS_CC frameGenCreate(const VSMap* in, VSMap* out, void* userData, VSCore* c
   // every node a filter requests to be one of its declared dependencies, and 4.1's node inspection
   // reports exactly this list. rpGeneral because a frame asks for srcA and srcA+1 in whatever order
   // the core schedules them; fmUnordered because frame n's output does not depend on the order.
+  //
+  // fmParallelRequests was tried here and reverted: it lets the core keep several requests in flight,
+  // but VapourSynth keeps every in-flight output frame alive while it does, and on a 10 GB card that
+  // already holds five lanes (~1.4 GB each) the process fell into WDDM paging: a 9 ms in-between
+  // became ~700 ms per frame. fmUnordered keeps one request at a time, which is what this plugin is
+  // built around; see docs/engines.md for the measurement.
   const VSFilterDependency deps[] = {{data->node, rpGeneral}, {data->mvNode, rpGeneral}};
   const int numDeps = data->mvNode ? 2 : 1;
   VSNode* output = vsapi->createVideoFilter2("FrameGen", &data->vi, getFrame, freeFilter,

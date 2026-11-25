@@ -602,10 +602,17 @@ struct VfgSession::Impl {
   // One context, stream, effect and set of surfaces for one in-between of a pair.
   bool createLane(Lane& lane, unsigned index, std::string& error) {
     const double t0 = nowMs();
+    // VFG_TIMING also breaks the load down: the medium and low tiers take three to four times as long
+    // to load as high, and this says which step pays for it (it is all inside NvVFX_Load).
+    const auto lap = [&](const char* what) {
+      if (timing)
+        std::fprintf(stderr, "[vvfg] load %-11s %6.1f ms\n", what, nowMs() - t0);
+    };
     if (cuda.ctxCreate(&lane.ctx, 0, device) != 0) {
       error = "NVIDIA Video Frame Generation: could not create a CUDA context";
       return false;
     }
+    lap("context");
     // ctxCreate leaves the new context current, so everything below lands in it.
     if (!packed &&
         (cuda.memAllocHost(reinterpret_cast<void**>(&packed), frameBytes * 2) != 0 ||
@@ -613,11 +620,13 @@ struct VfgSession::Impl {
       error = "NVIDIA Video Frame Generation: could not pin host memory";
       return false;
     }
+    lap("pinned");
     Effect eff{nvf};
     if (!eff.step(nvf.create("VideoFrameGeneration", &lane.effect), "the effect's create", error)) {
       lane.effect = nullptr;
       return false;
     }
+    lap("create");
     const unsigned w = config.width, h = config.height;
     if (cuda.streamCreate(&lane.stream, 0) != 0) {
       error = "NVIDIA Video Frame Generation: a CUDA stream could not be created";
@@ -631,11 +640,13 @@ struct VfgSession::Impl {
         !eff.step(nvf.load(lane.effect), "the model's load", error) ||
         !eff.step(nvf.setU32(lane.effect, "FrameMultiplier", 0), "the free-time mode", error))
       return false;
+    lap("model load");
     for (auto& d : lane.dev)
       if (cuda.memAlloc(&d, frameBytes) != 0) {
         error = "NVIDIA Video Frame Generation: out of device memory for the frame buffers";
         return false;
       }
+    lap("surfaces");
     if (verbose) {
       size_t freeBytes = 0, totalBytes = 0;
       if (cuda.memGetInfo && cuda.memGetInfo(&freeBytes, &totalBytes) == 0)
@@ -757,8 +768,8 @@ struct VfgSession::Impl {
     const double t2 = timing ? nowMs() : 0.0;
     const bool ok = ran && download(lane, out, format);
     if (ok && timing)
-      std::fprintf(stderr, "[vvfg] tween lane=%u t=%.3f up=%.2f run=%.2f down=%.2f ms\n", index - 1,
-                   static_cast<double>(t), t1 - t0, t2 - t1, nowMs() - t2);
+      std::fprintf(stderr, "[vvfg] tween lane=%u t=%.3f up=%.2f run=%.2f ms\n", index - 1,
+                   static_cast<double>(t), t1 - t0, t2 - t1);
     if (ok && verbose)
       std::fprintf(stderr, "[vvfg] index %u/%u on lane %u at t=%.3f\n", index, count, index - 1,
                    static_cast<double>(t));
@@ -794,10 +805,19 @@ struct VfgSession::Impl {
   // Unpack the destination surface back into the caller's planes: RGBS float, or planar YUV when the
   // caller asked for YUV back (chroma is the average of the subW x subH block).
   bool download(Lane& lane, const PlaneSink& out, const fg::ColorFormat& format) {
+    const double t0 = nowMs();
     if (cuda.memcpyDtoHAsync(hostOut, lane.dev[2], frameBytes, lane.stream) != 0)
       return false;
     if (cuda.streamSynchronize(lane.stream) != 0)
       return false;
+    const double t1 = nowMs();
+    // The wait covers the copy and the model (NvVFX_Run only enqueues), so VFG_TIMING reports it
+    // apart from the unpack, which is the host's own share.
+    const auto report = [&]() {
+      if (timing)
+        std::fprintf(stderr, "[vvfg] stage wait=%6.2f unpack=%6.2f ms\n", t1 - t0, nowMs() - t1);
+      return true;
+    };
     const unsigned w = config.width, h = config.height;
     // One output row from the packed surface into float RGB, shared by both paths below.
     const auto unpackRowFn = [&](unsigned y, float* r, float* g, float* b) {
@@ -811,7 +831,7 @@ struct VfgSession::Impl {
                       reinterpret_cast<float*>(out.data[2] + static_cast<ptrdiff_t>(y) * out.stride[2]));
         }
       });
-      return true;
+      return report();
     }
     fg::YuvRowWriter writer;
     writer.bind(out, format, int(w), int(h));
@@ -834,7 +854,7 @@ struct VfgSession::Impl {
         writer.writeBlock(int(cy), rows, count);
       }
     });
-    return true;
+    return report();
   }
 };
 
