@@ -16,6 +16,7 @@
 4. 预检：两条路径各用 40 帧试跑一次，确认滤镜真的初始化了（失败的路径整段跳过并警告）。
 5. 每个分辨率先跑 VS 滤镜、再跑原生滤镜，最后打印汇总表并写入
    `installer\mpv-FilterBench-result.tsv`（`tag / WxH / multi / frames / elapsed_s / out_fps / src_fps / note`）。
+6. 再把系统/显卡/驱动/播放器版本和这轮结果整理成 `installer\report.txt`，可以直接发给别人。
 
 免交互（批处理/自己脚本里调用）：
 
@@ -42,15 +43,30 @@ VS      --vf=d3d11vpp=scale=X,vapoursynth=portable_config/vs/MEMC_DLSSG_NV.vpy
 原生    --vf=d3d11vpp=scale=X,playkit=multi=N:log=no:dll=vs-plugins/vdlssg.dll:proxy_dir=vs-plugins/dlss45
 ```
 
-## 实测（RTX 3080 10GB，frames=600）
+## 报告（report.txt）
 
-自动生成的 1920x1080 30fps 片段（现在双击后的默认路径），multi=2：
+`:report` 段把 `MPV_BENCH_*` 环境变量交给 `installer\mpv_filter_bench_report.ps1`，生成
+`installer\report.txt`，四段：
+
+| 段 | 内容 |
+| --- | --- |
+| 系统 | Windows 版本/内部版本、架构、物理内存、CPU 型号/核数/线程/标称频率（`Win32_OperatingSystem` / `Win32_Processor`） |
+| 显卡 / 驱动 | 每块 `Win32_VideoController` 的名字、驱动版本与日期、当前分辨率/刷新率，外加 `nvidia-smi` 的卡名/驱动/显存（虚拟显示器也会列出来，属正常） |
+| 播放器 | `mpv --version` 的第一行 + `FFmpeg version` 行 |
+| 测试条件 + 结果 | 素材路径（自动生成会标注）、源宽度、目标分辨率、multi、播放参数、两条 vf 命令行，结果表按 8 列对齐 |
+
+`Win32_VideoController.AdapterRAM` 对 4GB 以上的卡会报成 4.0 GB，显存以 `nvidia-smi` 那行为准。
+报告用 UTF-8 带 BOM 写，记事本/浏览器/微信文件预览都能正常显示中文。
+
+
+
+自动生成的 1920x1080 30fps 片段（双击后的默认路径），multi=2，GPU 空载实测：
 
 | 分辨率 | VS 滤镜 out/src fps | 原生滤镜 out/src fps |
 | --- | --- | --- |
-| 1080p（1920x1080） | 146.9 / 73.4 | 52.1 / 26.1 |
-| 2k（2560x1440） | 96.4 / 48.2 | 48.3 / 24.1 |
-| 4k（3840x2160） | 55.1 / 27.6 | 39.3 / 19.6 |
+| 1080p（1920x1080） | 149.7 / 74.8 | 51.2 / 25.6 |
+| 2k（2560x1440） | 96.0 / 48.0 | 53.7 / 26.8 |
+| 4k（3840x2160） | 52.2 / 26.1 | 40.3 / 20.1 |
 
 早期用 1920x816 素材（2.35:1）测的表，含 6× 档，留作对比：
 
@@ -84,6 +100,17 @@ VS      --vf=d3d11vpp=scale=X,vapoursynth=portable_config/vs/MEMC_DLSSG_NV.vpy
 - `--input=no`、`--terminal=no` 会连 `--term-playing-msg` 一起关掉（探片源宽度靠它），只加 `<nul` 防吞输入即可。
 - 探片源宽度那次的 mpv 会占住重定向的 stdin，交互输入只在真实控制台可靠——批处理请用上面三参数形式。
 - 编辑这套脚本：`.bat` 必须存成 **ANSI（GB18030）+ CRLF**（UTF-8 会让 cmd 错行、中文乱码）。
+- **VS 滤镜定位 VSScript 用包内副本**：脚本 `set VSSCRIPT_PATH=<包根>\Lib\site-packages\vapoursynth\vsscript.dll`
+  （`mpv-src\video\filter\vf_vapoursynth.c:819` 支持这个环境变量）。包里那份往上四层正好是包根，
+  能自己找到 `python.exe`/`python3.dll`，不读 `%APPDATA%\VapourSynth\vapoursynth.toml`。
+  这台机器上 PATH 里的旧 `vapoursynth.exe config` 会把那份 toml 写成 2 字段（R82 要 3 字段、第三个是
+  `python.exe` 的 mtime），一被重写就整段 `Failed to initialize VapourSynth VSScript library`——
+  别去修全局 toml，跑分只认包内副本。
+- 报错 `Failed to initialize VapourSynth VSScript library: Python executable and library path
+  couldn't be determined...` 就是上面那条（VS 预检会整段跳过，只剩原生滤镜那一行）。
+- 报告要用 **UTF-8 带 BOM** 写（PS 5.1 读无 BOM 按 ANSI，中文乱码）；`& 'mpv.com'` 在 PowerShell 里
+  不查当前目录，要传绝对路径（脚本已改用 `%CD%\mpv.com` 并在 ps1 里兜底 `Join-Path`)。
+- 同一台机器上跑别的 GPU 负载（例如另一场并发基准）会让结果整体慢 3–4 倍，报告里的数字务必在空载时测。
 
 ## 落地位置
 
@@ -92,7 +119,8 @@ VS      --vf=d3d11vpp=scale=X,vapoursynth=portable_config/vs/MEMC_DLSSG_NV.vpy
 | `mpv-playkit\installer\mpv-补帧滤镜跑分.bat` | 交互入口（取素材、问分辨率/倍数、逐档跑两条路径） |
 | `mpv-playkit\installer\mpv-FilterBench.conf` | 公共播放参数（hwdec / flip / untimed / frames / 窗口） |
 | `mpv-playkit\installer\mpv_filter_bench.lua` | 计时探针（记时、算 fps、追加 TSV） |
+| `mpv-playkit\installer\mpv_filter_bench_report.ps1` | 出 `installer\report.txt`（系统/显卡/驱动/播放器 + 测试条件 + 结果表） |
 
 打包：`mpv-playkit\manifests\components.yml` 的 `bench-scripts` 组件（kind=repo-files）把这
-三个文件落到包的 `installer/` 下——installer/ 其余上游脚本仍然冻结、不进包，见
+四个文件落到包的 `installer/` 下——installer/ 其余上游脚本仍然冻结、不进包，见
 `mpv-playkit\docs\DECISIONS.md` 第 32 条。
