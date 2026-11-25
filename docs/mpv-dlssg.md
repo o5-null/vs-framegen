@@ -111,4 +111,8 @@ v       script-binding k7f_memc_guard/status
 包里四个 VS 补帧预设的实测（吞吐、XeSS-FG 3× 崩溃、新旧 vpy 差异）见
 [`mpv-playkit-vs-engine-check.md`](mpv-playkit-vs-engine-check.md)。
 
+想在自己机器上量「VS 滤镜 vs 原生滤镜」的吞吐，用包里的 `installer\mpv-补帧滤镜跑分.bat`
+（1080p / 2k / 4k 可选，回车全测）：口径与实测数字见
+[`mpv-filter-bench.md`](mpv-filter-bench.md)。
+
 
