@@ -2,6 +2,7 @@
 
 #include <d3dcompiler.h>
 
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 
@@ -828,8 +829,39 @@ void Gpu::recordConvertInput(int slot) {
 
 void Gpu::recordConvertOutput() {
   if (!shareOutPso_ || !shareOut_) return;
+  // 实验：把转换结果先写进本地纹理，再整体 CopyResource 到共享纹理，
+  // 用来验证"共享纹理上直接开 UAV 做 dispatch"是否是那 5ms 的根因。
+  const bool useLocal = std::getenv("VDLSSG_CONV_LOCAL") != nullptr;
+  // Re-create the local texture when the output size changes (resolution switch mid-session).
+  bool localStale = !outLocal_;
+  if (useLocal && !localStale) {
+    const D3D12_RESOURCE_DESC o = output_->GetDesc();
+    const D3D12_RESOURCE_DESC l = outLocal_->GetDesc();
+    localStale = l.Width != o.Width || l.Height != o.Height;
+  }
+  if (useLocal && localStale) {
+    outLocal_.Reset();
+    outLocalState_ = D3D12_RESOURCE_STATE_COMMON;
+    D3D12_RESOURCE_DESC ld = output_->GetDesc();
+    ld.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    ld.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+    const auto lh = heapProps(D3D12_HEAP_TYPE_DEFAULT);
+    const HRESULT lr = device_->CreateCommittedResource(
+        &lh, D3D12_HEAP_FLAG_NONE, &ld, D3D12_RESOURCE_STATE_COMMON, nullptr,
+        IID_PPV_ARGS(&outLocal_));
+    if (FAILED(lr)) {
+      std::fprintf(stderr, "[vdlssg] outLocal create failed 0x%08lx\n",
+                   static_cast<unsigned long>(lr));
+      return;
+    }
+  }
+  ID3D12Resource* dst = useLocal ? outLocal_.Get() : shareOut_.Get();
+  D3D12_RESOURCE_STATES& dstState = useLocal ? outLocalState_ : shareOutState_;
+  const bool probe = std::getenv("VDLSSG_CONVPROBE") != nullptr;
+  const auto t0 = std::chrono::steady_clock::now();
   transition(output_.Get(), outputState_, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-  transition(shareOut_.Get(), shareOutState_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+  transition(dst, dstState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+  const auto t1 = std::chrono::steady_clock::now();
 
   ID3D12DescriptorHeap* heaps[] = {shareHeap_.Get()};
   list_->SetDescriptorHeaps(1, heaps);
@@ -845,27 +877,59 @@ void Gpu::recordConvertOutput() {
   sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
   sd.Texture2D.MipLevels = 1;
   device_->CreateShaderResourceView(output_.Get(), &sd, h);
+  const auto t2 = std::chrono::steady_clock::now();
   h.ptr += 2 * inc;
   D3D12_UNORDERED_ACCESS_VIEW_DESC ud{};
   ud.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
   ud.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
   ud.Texture2D.MipSlice = 0;
-  device_->CreateUnorderedAccessView(shareOut_.Get(), nullptr, &ud, h);
-  std::fprintf(stderr, "[vdlssg] convertOutput share=%p\n",
-               static_cast<void*>(shareOut_.Get()));
+  device_->CreateUnorderedAccessView(dst, nullptr, &ud, h);
+  const auto t3 = std::chrono::steady_clock::now();
+  std::fprintf(stderr, "[vdlssg] convertOutput share=%p local=%d\n",
+               static_cast<void*>(shareOut_.Get()), (int)useLocal);
 
   D3D12_GPU_DESCRIPTOR_HANDLE g = shareHeap_->GetGPUDescriptorHandleForHeapStart();
   list_->SetComputeRootDescriptorTable(0, g);
+  const auto c2 = std::chrono::steady_clock::now();
   g.ptr += 2 * inc;
   list_->SetComputeRootDescriptorTable(1, g);
+  const auto c3 = std::chrono::steady_clock::now();
   list_->SetComputeRoot32BitConstants(2, 12, &shareParams_, 0);
+  const auto c1 = std::chrono::steady_clock::now();
+  const auto t3a = c3;
   list_->Dispatch((width_ + 7) / 8, (height_ + 7) / 8, 1);
+  const auto t3a2 = std::chrono::steady_clock::now();
 
   D3D12_RESOURCE_BARRIER barrier{};
   barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
-  barrier.UAV.pResource = shareOut_.Get();
+  barrier.UAV.pResource = dst;
   list_->ResourceBarrier(1, &barrier);
-  transition(shareOut_.Get(), shareOutState_, D3D12_RESOURCE_STATE_COMMON);
+  const auto t3b = std::chrono::steady_clock::now();
+  if (useLocal) {
+    // 本地纹理写完后整体拷到共享纹理：共享侧只剩 COPY_DEST → COMMON。
+    transition(dst, dstState, D3D12_RESOURCE_STATE_COPY_SOURCE);
+    if (!std::getenv("VDLSSG_CONV_NOWRITE")) {
+      transition(shareOut_.Get(), shareOutState_, D3D12_RESOURCE_STATE_COPY_DEST);
+      list_->CopyResource(shareOut_.Get(), dst);
+      transition(shareOut_.Get(), shareOutState_, D3D12_RESOURCE_STATE_COMMON);
+    }
+    transition(dst, dstState, D3D12_RESOURCE_STATE_COMMON);
+  } else {
+    transition(dst, dstState, D3D12_RESOURCE_STATE_COMMON);
+  }
+  mark(3); // capture path: gpu copyMs/totalMs then include the convert
+  if (probe) {
+    const auto t4 = std::chrono::steady_clock::now();
+    const auto ms = [](std::chrono::steady_clock::time_point a,
+                       std::chrono::steady_clock::time_point b) {
+      return std::chrono::duration<double, std::milli>(b - a).count();
+    };
+    std::fprintf(stderr,
+                 "[vdlssg] convOut probe trans=%.2f srv=%.2f uav=%.2f c32=%.2f t0=%.2f "
+                 "t1=%.2f dispatch=%.2f barrier=%.2f back=%.2f\n",
+                 ms(t0, t1), ms(t1, t2), ms(t2, t3), ms(t3, c1), ms(c1, c2), ms(c2, c3),
+                 ms(c3, t3a2), ms(t3a2, t3b), ms(t3b, t4));
+  }
 }
 
 void Gpu::recordLuma(int slot, ID3D12Resource* dst) {

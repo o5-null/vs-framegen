@@ -264,6 +264,9 @@ class Gpu {
   D3D12_RESOURCE_STATES shareInState_[2] = {D3D12_RESOURCE_STATE_COMMON,
                                             D3D12_RESOURCE_STATE_COMMON};
   D3D12_RESOURCE_STATES shareOutState_ = D3D12_RESOURCE_STATE_COMMON;
+  // 实验用：转换结果先写本地纹理再 CopyResource 到共享纹理。
+  ComPtr<ID3D12Resource> outLocal_;
+  D3D12_RESOURCE_STATES outLocalState_ = D3D12_RESOURCE_STATE_COMMON;
   ComPtr<ID3D12DescriptorHeap> shareHeap_;
   ComPtr<ID3D12RootSignature> shareRoot_;
   ComPtr<ID3D12PipelineState> shareInPso_, shareOutPso_, shareLumaPso_;

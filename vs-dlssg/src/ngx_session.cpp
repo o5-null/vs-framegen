@@ -1338,6 +1338,16 @@ struct NgxSession::Impl {
   uint32_t motionWidth = 0;
   uint32_t motionHeight = 0;
   unsigned long long frameId = 0;
+  // Split of the last runPass wall time: recording the command list on the CPU, then submitting it
+  // and waiting for the fence. The gap between the two tells whether a pass is GPU-bound or paying
+  // submit-and-wait overhead.
+  double passRecMs = 0.0;
+  double passEvalMs = 0.0;
+  double passPostMs = 0.0;
+  double passSyncMs = 0.0;
+  // GPU-side spans the same pass reported through its timestamp queries.
+  double passGpuEvalMs = 0.0;
+  double passGpuTotalMs = 0.0;
   // Pair whose current frame still sits in the colour texture, or -1 when unknown. Frames are
   // usually generated in order, so pass 1 of the next pair needs no upload at all.
   int64_t lastPairIndex = -1;
@@ -1565,6 +1575,7 @@ void NgxSession::Impl::shutdown() {
 bool NgxSession::Impl::runPass(bool reset, bool captureOutput, bool copyColor, bool copyMotion,
                                uint32_t mfCount, uint32_t mfIndex, const float* cameraAffine,
                                std::string& error, bool captureTexture) {
+  const auto tRec = std::chrono::steady_clock::now();
   if (!gpu->begin(error)) return false;
   gpu->recordDisableReset();
   gpu->recordPreEvaluate(copyColor, copyMotion);
@@ -1586,7 +1597,9 @@ bool NgxSession::Impl::runPass(bool reset, bool captureOutput, bool copyColor, b
   eval.pOutputDisableInterpolation = gpu->disableTexture();
 
   params->Set(NVSDK_NGX_DLSSG_Parameter_BackbufferFrameID, frameId++);
+  const auto tEval = std::chrono::steady_clock::now();
   const NVSDK_NGX_Result r = NGX_D3D12_EVALUATE_DLSSG(gpu->list(), feature, params, &eval, &opt);
+  const auto tEvalEnd = std::chrono::steady_clock::now();
   gpu->recordEvaluated();
   if (captureOutput) {
     if (captureTexture) {
@@ -1596,7 +1609,20 @@ bool NgxSession::Impl::runPass(bool reset, bool captureOutput, bool copyColor, b
     }
   }
   gpu->recordDisableReadback();
+  const auto tSync = std::chrono::steady_clock::now();
+  const auto msBetween = [](std::chrono::steady_clock::time_point a,
+                            std::chrono::steady_clock::time_point b) {
+    return std::chrono::duration<double, std::milli>(b - a).count();
+  };
+  passRecMs = msBetween(tRec, tEval);
+  passEvalMs = msBetween(tEval, tEvalEnd);
+  passPostMs = msBetween(tEvalEnd, tSync);
   if (!gpu->endAndWait(error)) return false;
+  passSyncMs = std::chrono::duration<double, std::milli>(
+                   std::chrono::steady_clock::now() - tSync)
+                   .count();
+  passGpuEvalMs = gpu->timings().evaluateMs;
+  passGpuTotalMs = gpu->timings().totalMs;
   if (NVSDK_NGX_FAILED(r)) {
     error = describe("EvaluateDlssg", r);
     return false;
@@ -1917,6 +1943,9 @@ bool NgxSession::generateTexturesMulti(void* prev, void* cur, uint64_t streamId,
 
   // Stage timing for the texture bridge: the shared path is dominated by submit-and-wait round
   // trips, so PLAYKIT-style numbers need a per-stage split to show where the wall time goes.
+  // Diagnostic: skip the per-pass conversion into the shared output textures, so a run shows what
+  // the evaluate call itself costs when no shared resource is written between passes.
+  const bool skipConvert = getenv("VDLSSG_SKIP_CONVERT") != nullptr;
   const bool trace = getenv("VDLSSG_TIMING") != nullptr;
   const auto clockNow = [] { return std::chrono::steady_clock::now(); };
   const auto sinceMs = [](std::chrono::steady_clock::time_point start) {
@@ -1924,17 +1953,23 @@ bool NgxSession::generateTexturesMulti(void* prev, void* cur, uint64_t streamId,
         .count();
   };
   double convPrevMs = 0.0, seedMs = 0.0, convCurMs = 0.0, evalMs = 0.0;
+  double recMs = 0.0, waitMs = 0.0, gpuEvalMs = 0.0, gpuTotalMs = 0.0;
 
   const auto wallStart = std::chrono::steady_clock::now();
-  // Seed the history with prev once, then evaluate every intermediate index against cur.
-  const auto tConvPrev = clockNow();
-  if (!s.gpu->begin(error)) return false;
-  s.gpu->recordConvertInput(0);
-  if (!s.gpu->endAndWait(error)) return false;
-  convPrevMs = sinceMs(tConvPrev);
-  const auto tSeed = clockNow();
-  if (!s.runPass(true, false, false, false, 1, 1, nullptr, error)) return false;
-  seedMs = sinceMs(tSeed);
+  // The seed is only needed when the history does not already end with this pair's prev: after the
+  // last pass of a pair the runtime's newest frame IS cur, which is exactly the next pair's prev,
+  // so re-seeding with a whole extra evaluate is wasted work.
+  const bool needSeed = !(s.pairSeeded && s.lastPairIndex + 1 == pairIndex);
+  if (needSeed) {
+    const auto tConvPrev = clockNow();
+    if (!s.gpu->begin(error)) return false;
+    s.gpu->recordConvertInput(0);
+    if (!s.gpu->endAndWait(error)) return false;
+    convPrevMs = sinceMs(tConvPrev);
+    const auto tSeed = clockNow();
+    if (!s.runPass(true, false, false, false, 1, 1, nullptr, error)) return false;
+    seedMs = sinceMs(tSeed);
+  }
 
   const auto tConvCur = clockNow();
   if (!s.gpu->begin(error)) return false;
@@ -1947,18 +1982,23 @@ bool NgxSession::generateTexturesMulti(void* prev, void* cur, uint64_t streamId,
     // One reset per pair, then evaluate each intermediate index against the same cur frame.
     // (Deferring the wait and batching the passes into one list was tried and is wrong: the
     // conversion dispatch reads output_ after the following evaluate has overwritten it.)
-    if (!s.runPass(false, true, false, useMotion, multiFrameCount, i + 1, nullptr, error,
-                   true)) {
+    if (!s.runPass(false, !skipConvert, false, useMotion, multiFrameCount, i + 1, nullptr,
+                   error, !skipConvert)) {
       return false;
     }
+    recMs += s.passRecMs;
+    waitMs += s.passSyncMs;
+    gpuEvalMs += s.passGpuEvalMs;
+    gpuTotalMs += s.passGpuTotalMs;
   }
   evalMs = sinceMs(tEval);
   if (trace) {
     std::fprintf(stderr,
                  "[vdlssg] multi timing n=%u conv_prev=%.2f seed=%.2f conv_cur=%.2f eval=%.2f "
-                 "(%0.2f/eval) total=%.2f\n",
+                 "(%0.2f/eval) rec=%.2f wait=%.2f gpu_eval=%.2f gpu_total=%.2f total=%.2f\n",
                  outCount, convPrevMs, seedMs, convCurMs, evalMs,
-                 outCount ? evalMs / outCount : 0.0, sinceMs(wallStart));
+                 outCount ? evalMs / outCount : 0.0, recMs, waitMs, gpuEvalMs, gpuTotalMs,
+                 sinceMs(wallStart));
   }
 
   s.lastPairIndex = pairIndex;
