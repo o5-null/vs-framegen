@@ -98,6 +98,23 @@ local params = {
     },
 }
 
+-- 模型档位只有 VFG 有（k7sfunc.mod_vpy 只给 vvfg 认 mode）；别的引擎放进去只会
+-- 让 OSD 多一行没作用的项，所以按脚本名决定加不加
+local VFG_SCRIPTS = { ['memc_vfg_nv.vpy'] = true }
+
+local function script_basename(path)
+    local name = tostring(path or ''):gsub('\\', '/')
+    return (name:match('[^/]+$') or ''):lower()
+end
+
+if VFG_SCRIPTS[script_basename(o.script)] then
+    -- 插在倍数后面：决定输出帧数的先选，再选画质/速度
+    table.insert(params, 2, {
+        key = 'mode', name = '档位', default = '1',
+        choices = { { '低', '0' }, { '中', '1' }, { '高', '2' } },
+    })
+end
+
 local ORDER = {}
 for i, p in ipairs(params) do
     ORDER[i] = p.key

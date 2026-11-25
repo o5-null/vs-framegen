@@ -98,7 +98,9 @@ out = core.vvfg.FrameGen(src, multi=6, proxy_dir=r"...\vfg")      # NVIDIA VFG�
 out = core.vfsr4.FrameGen(src, multi=2, proxy_dir=r"...\fsr4")     # AMD FSR 4
 ```
 
-VFG 每个中间帧要一条独立 CUDA context（模型把「上一帧」状态存在 context 里），1080p 约 1.4 GB 显存 + 0.5–0.7 s 建 lane，6× 在 10 GB 卡上可行、4K 不可行，细节见 `docs\engines.md`。
+VFG 每个中间帧要一条独立 CUDA context（模型把「上一帧」状态存在 context 里），1080p 默认 medium 档约 0.7 GB 显存（high 档 1.4 GB）+ 1.5–2.5 s 建 lane（high 0.4–0.75 s），6× 在 10 GB 卡上可行、4K 不可行，细节见 `docs\engines.md`。
+
+**仅 vvfg** 有模型档位 `mode`：`0` low / `1` medium（默认）/ `2` high。medium 与 high 的 PSNR-Y 只差 0.4 dB，1080p 每张内插约 3 ms（high 约 30 ms）、每条 lane 约 0.7 GB（high 1.4 GB），所以默认取 medium；high 留给画质优先的静态画面。环境变量 `VFG_MODE` 可临时换档。
 
 ## 性能（RTX 3080，星铁 PV 4K 源，每配置 30 对 × 2 轮取最好）
 
