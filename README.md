@@ -93,7 +93,7 @@ cmd /c E:\code\dlssg-vfi\vs-dlssg\src\build.bat
 依赖（可用环境变量覆盖：`NGX_SDK` / `VS_INCLUDE` / `VCVARS` / `VULKAN_SDK`）：
 
 - MSVC x64（`C:\software\msvc\VC\Auxiliary\Build\vcvars64.bat`）
-- NGX SDK：`git clone https://github.com/NVIDIA/DLSS repos\ngxsdk`，构建链 `nvsdk_ngx_d.lib`
+- NGX SDK：`git clone https://github.com/NVIDIA/DLSS ngxsdk`，构建链 `nvsdk_ngx_d.lib`
 - VapourSynth R74+ 头文件（`E:\code\VFI\.venv\Lib\site-packages\vapoursynth\include`）
 - Vulkan SDK（只有 `vfsr4` 用）
 

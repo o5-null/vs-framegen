@@ -2,7 +2,7 @@
 set -e
 export MSYSTEM=CLANG64
 export PATH=/clang64/bin:/usr/bin:/bin:$PATH
-cd /e/code/dlssg-vfi/repos/mpv-src/build-msys
+cd /e/code/dlssg-vfi/mpv-src/build-msys
 ./mpv.exe --no-config --ao=null --vo=gpu --gpu-context=d3d11 --d3d11-adapter=#1 \
   --hwdec=d3d11va \
   --vf=playkit=multi=6:log:dll=dlss45/vdlssg.dll:proxy_dir=dlss45 \

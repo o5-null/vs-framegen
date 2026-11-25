@@ -20,27 +20,27 @@
   `<DLL 目录>\<引擎>` 找，这是设计意图。0.1.0 资产里的 `vs-plugins\bin\<引擎>` 是多套的一层，
   K7 脚本会兼容，但不要当成本仓库的发行布局，也不要据此改打包脚本。
 
-## 邻近仓库（统一放在 `repos\` 下，各自独立 .git，已被 .gitignore 忽略）
+## 邻近仓库（在仓库根下的同级目录，各自独立 .git，已被 .gitignore 忽略）
 
-- repos\k7sfunc：K7sfunc 的 fork（o5-null/K7sfunc），PLAYKIT 预设层与 RIFE_AJI 算子在这里；改动 push 后由 mpv-playkit 按 commit 钉版本
-- repos\mpv-playkit：Windows x64 便携 mpv 预览包的构建链（o5-null/mpv-playkit-pre），manifest + sources.lock
-- repos\vsaji：AnimeJaNai (libaji) 的 VapourSynth 插件与构建脚本，产物 dist\aji 供 k7sfunc 的 RIFE_AJI 使用
-- repos\mpv-src：mpv 源码与 msys 构建树（只读参考，`run-mpv-test.sh` 等脚本指向它的 build-msys）
-- repos\ngxsdk：NVIDIA DLSS SDK 的克隆（`vs-dlssg\src\build.bat` 的默认 NGX_SDK）
-- repos\k7sfunc-wiki：wiki 源；k7sfunc-wiki-pages、vs-framegen-wiki-pages 是静态页输出（不是仓库）
+- k7sfunc：K7sfunc 的 fork（o5-null/K7sfunc），PLAYKIT 预设层与 RIFE_AJI 算子在这里；改动 push 后由 mpv-playkit 按 commit 钉版本
+- mpv-playkit：Windows x64 便携 mpv 预览包的构建链（o5-null/mpv-playkit-pre），manifest + sources.lock
+- vsaji：AnimeJaNai (libaji) 的 VapourSynth 插件与构建脚本，产物 dist\aji 供 k7sfunc 的 RIFE_AJI 使用
+- mpv-src：mpv 源码与 msys 构建树（只读参考，`run-mpv-test.sh` 等脚本指向它的 build-msys）
+- ngxsdk：NVIDIA DLSS SDK 的克隆（`vs-dlssg\src\build.bat` 的默认 NGX_SDK）
+- k7sfunc-wiki：wiki 源；k7sfunc-wiki-pages、vs-framegen-wiki-pages 是静态页输出（不是仓库）
 
 跨仓库的改动要分别提交到各自的仓库；本仓库的 .gitignore 只负责把它们挡在外面，不会被一起提交。
 
 ### 统一产物与共享缓存
 
-`repos\` 同时充当工作区根，构建产物与下载缓存都放在仓库之外，多个子仓库共用：
+`repos\` 只装构建产出的交付归档与下载缓存（子仓库本身留在根下各自目录），多个子仓库共用：
 
 - `repos\dist\`：交付归档（本仓库的 `vs-framegen-<版本>.zip`、mpv-playkit 的基础包与两个档位 7z）
 - `repos\.cache\downloads\`：mpv-playkit 的下载缓存（按 sha256 定位，一份资产只存一次）
 
-mpv-playkit 的 `build/common.py` 会自动识别（父目录名为 `repos`），CI 上没有这个目录时退回仓库内
-`.work\downloads` / `dist\out`。手动指定共享根用 `PLAYKIT_SHARED_ROOT`。构建完的归档请放进
-`repos\dist\`，不要留在各仓库的 `dist\out`。
+mpv-playkit 的 `build/common.py` 会自动识别（同级存在 `repos\dist` 或 `repos\.cache`），
+CI 上没有这个目录时退回仓库内 `.work\downloads` / `dist\out`。手动指定共享根用
+`PLAYKIT_SHARED_ROOT`。构建完的归档请放进 `repos\dist\`，不要留在各仓库的 `dist\out`。
 
 ## Python 环境与包管理（uv）
 
@@ -62,9 +62,9 @@ uv pip install --python .venv\Scripts\python.exe vapoursynth==74 numpy vsrepo
   （`uses API 3, which is no longer supported`），而 k7sfunc 的 RIFE_NV / RIFE_AJI 都依赖 akarin。
 - ffms2 / imwri 由 vsrepo 装进 `.venv\Lib\site-packages\vapoursynth\plugins\vsrepo`（VS 自动扫描该子目录）。
 - 其余插件不进 venv，按路径 LoadPlugin：akarin/vstrt（+ vsmlrt-cuda 运行时）在 `测试环境\mpv-lazy\vs-plugins`；
-  aji 运行时是 `work\aji-models`（`repos\vsaji\dist\aji` 的拷贝，用 `AJI_DIR` 指过去）。
+  aji 运行时是 `work\aji-models`（`vsaji\dist\aji` 的拷贝，用 `AJI_DIR` 指过去）。
 - 测速脚本在 `work\aji-rife-test`（不进 git）：`one.py` 一次跑一种引擎+模型，`mk_src.py` 把
   `测试数据\1080p` 的 PNG 转成无损 FFV1（`--source ffv1`），避免把 PNG 解码算进引擎耗时。
 - aji 的分阶段计时桩默认关闭，`AJI_PROFILE=1`（`AJI_PROFILE_EVERY=N`，默认 10 帧）打开，
   stderr 出 `[aji-profile/plugin]`（上传/交织/回传）与 `[aji-profile/trt]`（setup…infer…crop）两行；
-  桩在 `repos\vsaji\src\aji_host.cpp`、`aji_frames.cpp`、`.deps/engine/src/aji_trt.cpp`，改完要重编 engine + 插件。
+  桩在 `vsaji\src\aji_host.cpp`、`aji_frames.cpp`、`.deps/engine/src/aji_trt.cpp`，改完要重编 engine + 插件。

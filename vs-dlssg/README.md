@@ -45,7 +45,7 @@ cmd /c vs-dlssg\src\build.bat
 需要 MSVC（x64）、[NGX SDK](https://github.com/NVIDIA/DLSS) 的头与 `nvsdk_ngx_d.lib`、VapourSynth R74+ 头。默认按下面的布局找依赖，任一不存在会直接报错退出：
 
 ```
-NGX_SDK      = <包>\..\..\repos\ngxsdk
+NGX_SDK      = <包>\..\..\ngxsdk
 VS_INCLUDE   = E:\code\VFI\.venv\Lib\site-packages\vapoursynth\include
 VCVARS       = C:\software\msvc\VC\Auxiliary\Build\vcvars64.bat
 ```

@@ -16,7 +16,7 @@ export MSYSTEM=CLANG64
 export PATH=/clang64/bin:/usr/bin:/bin:$PATH
 export PKG_CONFIG_PATH=/clang64/lib/pkgconfig:/clang64/share/pkgconfig
 
-cd /e/code/dlssg-vfi/repos/mpv-src
+cd /e/code/dlssg-vfi/mpv-src
 
 MESON_ARGS=(
   --prefix=/clang64
