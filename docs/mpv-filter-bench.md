@@ -8,10 +8,13 @@
 
 包里的 `installer\mpv-补帧滤镜跑分.bat`：
 
-1. 双击；素材可以拖进窗口、粘贴路径，或事先改名成 `installer\bench-clip.mkv`（有它就不再问）。
+1. 双击；**不需要准备素材**，直接回车就会自动生成一段 10 秒 1920x1080 测试片段
+   （缓存在 `%TEMP%\mpv-filter-bench\bench-src.mp4`，删掉即重新生成）。也可以把视频拖进窗口、
+   粘贴路径，或事先改名成 `installer\bench-clip.mkv|mp4`（有它就不再问）。
 2. 问分辨率：`1080p` / `2k` / `4k`，可以写多个（空格或逗号分隔）；**直接回车 = 三个全测**。
 3. 问倍数 `multi`（2–6）；**直接回车 = 2**。
-4. 每个分辨率先跑 VS 滤镜、再跑原生滤镜，最后打印汇总表并写入
+4. 预检：两条路径各用 40 帧试跑一次，确认滤镜真的初始化了（失败的路径整段跳过并警告）。
+5. 每个分辨率先跑 VS 滤镜、再跑原生滤镜，最后打印汇总表并写入
    `installer\mpv-FilterBench-result.tsv`（`tag / WxH / multi / frames / elapsed_s / out_fps / src_fps / note`）。
 
 免交互（批处理/自己脚本里调用）：
@@ -24,12 +27,13 @@ installer\mpv-补帧滤镜跑分.bat "E:\视频\clip.mkv" "1080p 4k" 2
 
 | 项 | 取值 | 为什么 |
 | --- | --- | --- |
-| 素材 | 真实视频 + `hwdec=d3d11va` | `vf_playkit` 只吃 D3D11 硬件帧；合成源 `lavfi` 和 `--vo=null` 都会让滤镜静默不执行 |
+| 素材 | 真实视频（或自动生成的 mp4）+ `hwdec=d3d11va` | `vf_playkit` 只吃 D3D11 硬件帧；合成源 `lavfi` 和 `--vo=null` 都会让滤镜静默不执行 |
 | 分辨率 | `--vf=d3d11vpp=scale=W/SRCW,<补帧滤镜>` | 换分辨率不必换素材，D3D11 视频处理器在硬件域内缩放，按**宽度**算倍率 |
 | 播放 | `--untimed --frames=600` | 不算解码/呈现的时钟限制，只测吞吐 |
 | 呈现 | `d3d11-flip=no` + `d3d11-sync-interval=0` + `autofit=960x540` | 默认 flip/vsync 会把结果压到 66fps；小窗口降低呈现开销 |
 | 计时 | Lua 在 `playback-restart` 记 `mp.get_time()`，`end-file` 收尾 | NGX 初始化不进分母 |
 | 指标 | `out_fps = frames / elapsed`；`src_fps = out_fps / multi` | 前者是呈现吞吐，后者是"等效能吃多少源帧" |
+| 有效性 | 预检时在 `--log-file` 里找 `[vapoursynth] initialized.` / `playkit: vdlssg bridge ready` | 滤镜初始化失败时 mpv 只是禁用滤镜继续播，会跑出虚高的假数字 |
 
 两条路径的命令（倍数靠 `VDLSSG_MULTI` 传给 VS 脚本，避免 `user-data` 里的 `;` 引号地狱）：
 
@@ -38,7 +42,17 @@ VS      --vf=d3d11vpp=scale=X,vapoursynth=portable_config/vs/MEMC_DLSSG_NV.vpy
 原生    --vf=d3d11vpp=scale=X,playkit=multi=N:log=no:dll=vs-plugins/vdlssg.dll:proxy_dir=vs-plugins/dlss45
 ```
 
-## 实测（RTX 3080 10GB，源 1920x816 30fps，frames=600）
+## 实测（RTX 3080 10GB，frames=600）
+
+自动生成的 1920x1080 30fps 片段（现在双击后的默认路径），multi=2：
+
+| 分辨率 | VS 滤镜 out/src fps | 原生滤镜 out/src fps |
+| --- | --- | --- |
+| 1080p（1920x1080） | 146.9 / 73.4 | 52.1 / 26.1 |
+| 2k（2560x1440） | 96.4 / 48.2 | 48.3 / 24.1 |
+| 4k（3840x2160） | 55.1 / 27.6 | 39.3 / 19.6 |
+
+早期用 1920x816 素材（2.35:1）测的表，含 6× 档，留作对比：
 
 | 分辨率 | multi | VS 滤镜 out/src fps | 原生滤镜 out/src fps |
 | --- | --- | --- | --- |
@@ -61,10 +75,14 @@ VS      --vf=d3d11vpp=scale=X,vapoursynth=portable_config/vs/MEMC_DLSSG_NV.vpy
 - `--vf=` 的参数里 `~~/` **不会展开**，VS 脚本要写相对包根目录的 `portable_config/vs/...`。
 - mpv 会把脚本名里的 `-` 归一化成 `_`：`--msg-level` 前缀、脚本内求值名都要用 `mpv_filter_bench`；
   `script-opts` 在这条路径上取不到值，参数改用环境变量传。
-- Lua 的 `print()` 走 stdout，mpv 日志与 `[vdlssg] convertOutput ...` 噪音走 stderr（脚本里把 stderr 重定向到
-  `%TEMP%\mpv-filter-bench\*.log`）。
-- `--input=no` 会连 `--term-playing-msg` 一起关掉（探片源宽度用后者），所以探宽只加 `<nul` 防吞标准输入。
-- 探宽那次 mpv 会占住重定向的 stdin，交互输入只在真实控制台可靠——批处理请用上面三参数形式。
+- Lua 的 `print()` 与 mpv 自身日志都走 stdout；`[vdlssg] convertOutput ...` 那类噪音才走 stderr。
+  所以要留完整运行日志就用 `--log-file=`（自带 debug 级），别指望 `2>文件`。
+- 自动生成素材必须用 **mp4**：matroska 输出在这里写不出帧率（`container-fps=(unavailable)`），
+  vpy 拿到 0 会直接报 `AssumeFPS: invalid framerate specified`；`--ofps` 选项不存在，加了产出 0 字节。
+- 滤镜初始化失败时 mpv 只打印 `Disabling filter ... because it has failed.` 然后继续播，
+  fps 会虚高（VS 三档都能报 1300+），所以必须先预检并在日志里找**成功标记**。
+- `--input=no`、`--terminal=no` 会连 `--term-playing-msg` 一起关掉（探片源宽度靠它），只加 `<nul` 防吞输入即可。
+- 探片源宽度那次的 mpv 会占住重定向的 stdin，交互输入只在真实控制台可靠——批处理请用上面三参数形式。
 - 编辑这套脚本：`.bat` 必须存成 **ANSI（GB18030）+ CRLF**（UTF-8 会让 cmd 错行、中文乱码）。
 
 ## 落地位置
