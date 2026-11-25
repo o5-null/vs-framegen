@@ -539,6 +539,17 @@ struct VfgSession::Impl {
   int packedNext = 0;
   unsigned* hostOut = nullptr;
   size_t frameBytes = 0;
+  // The in-betweens of a pair are issued as a pipeline: the first call of a pair runs every in-between on
+  // its own lane right away, and every later call syncs its own first, issues the next one and then unpacks.
+  // That is the one shape where the host unpack of frame i overlaps the GPU work of the frame after it,
+  // which is otherwise strictly serial (see the stage ledger in docs/engines.md); it measured 26% on
+  // medium and 7% on high at 1080p. VFG_BATCH=0 turns it off for A/B runs.
+  bool batch = true;
+  int64_t batchPair = -1;
+  unsigned batchCount = 0;
+  std::vector<unsigned*> batchHost;  // one pinned frameBytes slot per in-between, allocated on first use
+  int batchA = -1;                   // shared source slots of the pair, taken by the first lane
+  int batchB = -1;
   CUdevice device = 0;
 
   std::mutex lock;
@@ -572,6 +583,10 @@ struct VfgSession::Impl {
           cuda.memFreeHost(packed);
         if (hostOut)
           cuda.memFreeHost(hostOut);
+        for (auto& slot : batchHost)
+          if (slot)
+            cuda.memFreeHost(slot);
+        batchHost.clear();
         packed = nullptr;
         hostOut = nullptr;
       }
@@ -781,6 +796,53 @@ struct VfgSession::Impl {
     return slot;
   }
 
+  // One pinned slot per in-between of the pair, allocated once per count. Each slot holds a copy of the
+  // whole frame, so a pair costs at most 7 x frameBytes of pinned host memory (5 x 16 MB at 1080p).
+  bool reserveHost(unsigned count, std::string& error) {
+    if (batchCount == count)
+      return true;
+    // cuMemAllocHost wants a context bound.
+    if (!ensureLane(0, error))
+      return false;
+    CUcontext prevCtx = nullptr;
+    if (cuda.ctxPushCurrent(lanes[0]->ctx) != 0)
+      return fail(error, "the CUDA context could not be bound");
+    for (auto& slot : batchHost)
+      if (slot)
+        cuda.memFreeHost(slot);
+    batchHost.assign(count, nullptr);
+    bool ok = true;
+    for (unsigned i = 0; i < count && ok; i++)
+      ok = cuda.memAllocHost(reinterpret_cast<void**>(&batchHost[i]), frameBytes) == 0;
+    cuda.ctxPopCurrent(&prevCtx);
+    if (!ok) {
+      error = "NVIDIA Video Frame Generation: out of pinned host memory for the pair's in-betweens";
+      batchHost.clear();
+      batchCount = 0;
+      return false;
+    }
+    batchCount = count;
+    return true;
+  }
+
+  // One in-between at a time: start it on its own lane and copy it back asynchronously into its pinned slot.
+  // The lanes have separate contexts and streams, so the GPU works on this frame while the host still unpacks
+  // the previous one; the normal path runs the two strictly one after the other.
+  bool issue(unsigned index, unsigned count, std::string& error) {
+    if (!ensureLane(index, error))
+      return false;
+    Lane& lane = *lanes[index];
+    CUcontext prevCtx = nullptr;
+    if (cuda.ctxPushCurrent(lane.ctx) != 0)
+      return fail(error, "the CUDA context could not be bound");
+    const float t = static_cast<float>(index + 1) / static_cast<float>(count + 1);
+    bool ok = run(lane.effect, lane.src[batchA], lane.src[batchB], lane.dst, t, error);
+    if (ok && cuda.memcpyDtoHAsync(batchHost[index], lane.dst, frameBytes, lane.stream) != 0)
+      ok = fail(error, "copying an in-between back failed");
+    cuda.ctxPopCurrent(&prevCtx);
+    return ok;
+  }
+
   // One run on the lane that owns this in-between's context, then the frame read back into RGBS.
   bool tween(int64_t pair, const PlaneView& prev, const PlaneView& cur, const PlaneSink& out, unsigned index,
              unsigned count, const fg::ColorFormat& format, std::string& error) {
@@ -788,6 +850,50 @@ struct VfgSession::Impl {
       return fail(error, "the frame index is out of range");
     if (!ensureLane(index - 1, error))
       return false;
+    if (batch && count > 1) {  // a pair with one in-between has nothing to overlap, so it keeps the direct path
+      if (batchPair != pair) {  // the first call of a pair uploads it once and starts the first in-between
+        const double b0 = timing ? nowMs() : 0.0;
+        if (!reserveHost(count, error))
+          return false;
+        Lane& first = *lanes[0];
+        CUcontext prevCtx = nullptr;
+        if (cuda.ctxPushCurrent(first.ctx) != 0)
+          return fail(error, "the CUDA context could not be bound");
+        batchA = source(pair, prev, format, first.stream, error);
+        batchB = batchA < 0 ? -1 : source(pair + 1, cur, format, first.stream, error);
+        bool started = batchB >= 0;
+        if (started)
+          started = issue(0, count, error);
+        cuda.ctxPopCurrent(&prevCtx);
+        if (!started)
+          return false;
+        batchPair = pair;
+        if (timing)
+          std::fprintf(stderr, "[vvfg] batch pair start count=%u %.2f ms\n", count, nowMs() - b0);
+      }
+      Lane& lane = *lanes[index - 1];
+      CUcontext prevCtx = nullptr;
+      if (cuda.ctxPushCurrent(lane.ctx) != 0)
+        return fail(error, "the CUDA context could not be bound");
+      const double s0 = timing ? nowMs() : 0.0;
+      if (cuda.streamSynchronize(lane.stream) != 0) {
+        cuda.ctxPopCurrent(&prevCtx);
+        return fail(error, "the result could not be copied back");
+      }
+      const double s1 = timing ? nowMs() : 0.0;
+      // Start the next in-between before unpacking this one, so the GPU runs while the host unpacks.
+      if (index < count && !issue(index, count, error)) {
+        cuda.ctxPopCurrent(&prevCtx);
+        return false;
+      }
+      const double s2 = timing ? nowMs() : 0.0;
+      const bool ok = unpack(batchHost[index - 1], out, format);
+      if (ok && timing)
+        std::fprintf(stderr, "[vvfg] batch serve lane=%u sync=%.2f issue=%.2f unpack=%.2f ms\n", index - 1,
+                     s1 - s0, s2 - s1, nowMs() - s2);
+      cuda.ctxPopCurrent(&prevCtx);
+      return ok;
+    }
     Lane& lane = *lanes[index - 1];
     CUcontext prevCtx = nullptr;
     if (cuda.ctxPushCurrent(lane.ctx) != 0)
@@ -839,52 +945,23 @@ struct VfgSession::Impl {
     return false;
   }
 
-  // Unpack the destination surface back into the caller's planes: RGBS float, or planar YUV when the
-  // caller asked for YUV back (chroma is the average of the subW x subH block).
-  bool download(Lane& lane, const PlaneSink& out, const fg::ColorFormat& format) {
-    const double t0 = nowMs();
-    if (cuda.memcpyDtoHAsync(hostOut, lane.dst, frameBytes, lane.stream) != 0)
-      return false;
-    if (cuda.streamSynchronize(lane.stream) != 0)
-      return false;
-    const double t1 = nowMs();
-    // The wait covers the copy and the model (NvVFX_Run only enqueues), so VFG_TIMING reports it
-    // apart from the unpack, which is the host's own share. VFG_DIAG unpacks the surface a second
-    // time into the now warm output plane: the two numbers separate the kernel's cost from first
-    // touching a frame buffer VapourSynth has just handed out.
-    const auto report = [&](double unpackMs, double repeatMs) {
-      if (!timing) return true;
-      if (repeatMs < 0.0)
-        std::fprintf(stderr, "[vvfg] stage wait=%6.2f unpack=%6.2f ms\n", t1 - t0, unpackMs);
-      else
-        std::fprintf(stderr, "[vvfg] stage wait=%6.2f unpack=%6.2f repeat=%6.2f ms\n", t1 - t0,
-                     unpackMs, repeatMs);
-      return true;
-    };
+  // One packed surface into the caller's planes: RGBS float, or planar YUV when the caller asked for YUV
+  // back (chroma is the average of the subW x subH block).
+  bool unpack(const unsigned* host, const PlaneSink& out, const fg::ColorFormat& format) {
     const unsigned w = config.width, h = config.height;
     // One output row from the packed surface into float RGB, shared by both paths below.
     const auto unpackRowFn = [&](unsigned y, float* r, float* g, float* b) {
-      unpackRow(hostOut + static_cast<size_t>(y) * w, r, g, b, w, eightBit);
+      unpackRow(host + static_cast<size_t>(y) * w, r, g, b, w, eightBit);
     };
     if (!format.isYuv()) {
-      const auto pass = [&]() {
-        parallelRows(h, [&](uint32_t y0, uint32_t y1) {
-          for (unsigned y = y0; y < y1; y++) {
-            unpackRowFn(y, reinterpret_cast<float*>(out.data[0] + static_cast<ptrdiff_t>(y) * out.stride[0]),
-                        reinterpret_cast<float*>(out.data[1] + static_cast<ptrdiff_t>(y) * out.stride[1]),
-                        reinterpret_cast<float*>(out.data[2] + static_cast<ptrdiff_t>(y) * out.stride[2]));
-          }
-        });
-      };
-      pass();
-      const double unpackMs = nowMs() - t1;
-      double repeatMs = -1.0;
-      if (diag) {
-        const double t2 = nowMs();
-        pass();
-        repeatMs = nowMs() - t2;
-      }
-      return report(unpackMs, repeatMs);
+      parallelRows(h, [&](uint32_t y0, uint32_t y1) {
+        for (unsigned y = y0; y < y1; y++) {
+          unpackRowFn(y, reinterpret_cast<float*>(out.data[0] + static_cast<ptrdiff_t>(y) * out.stride[0]),
+                      reinterpret_cast<float*>(out.data[1] + static_cast<ptrdiff_t>(y) * out.stride[1]),
+                      reinterpret_cast<float*>(out.data[2] + static_cast<ptrdiff_t>(y) * out.stride[2]));
+        }
+      });
+      return true;
     }
     fg::YuvRowWriter writer;
     writer.bind(out, format, int(w), int(h));
@@ -907,7 +984,34 @@ struct VfgSession::Impl {
         writer.writeBlock(int(cy), rows, count);
       }
     });
-    return report(nowMs() - t1, -1.0);
+    return true;
+  }
+
+  // Copy the lane's output surface back and unpack it. The wait covers the copy and the model (NvVFX_Run only
+  // enqueues), so VFG_TIMING reports it apart from the unpack, which is the host's own share. VFG_DIAG unpacks
+  // a second time into the now warm output plane: the two numbers separate the kernel from first touching a
+  // frame buffer VapourSynth has just handed out.
+  bool download(Lane& lane, const PlaneSink& out, const fg::ColorFormat& format) {
+    const double t0 = nowMs();
+    if (cuda.memcpyDtoHAsync(hostOut, lane.dst, frameBytes, lane.stream) != 0)
+      return false;
+    if (cuda.streamSynchronize(lane.stream) != 0)
+      return false;
+    const double t1 = nowMs();
+    if (!unpack(hostOut, out, format))
+      return false;
+    if (!timing)
+      return true;
+    const double t2 = nowMs();
+    if (!diag) {
+      std::fprintf(stderr, "[vvfg] stage wait=%6.2f unpack=%6.2f ms\n", t1 - t0, t2 - t1);
+      return true;
+    }
+    const double t3 = nowMs();
+    unpack(hostOut, out, format);
+    std::fprintf(stderr, "[vvfg] stage wait=%6.2f unpack=%6.2f repeat=%6.2f ms\n", t1 - t0, t2 - t1,
+                 nowMs() - t3);
+    return true;
   }
 };
 
@@ -944,8 +1048,14 @@ VfgSession* VfgSession::acquire(const Config& config, std::string& error) {
     impl->timing = timing && *timing && *timing != '0';
     const char* diag = std::getenv("VFG_DIAG");
     impl->diag = diag && *diag && *diag != '0';
-    if (impl->verbose)
+    // The pipeline is on by default; VFG_BATCH=0 falls back to one in-between per call for A/B runs.
+    const char* batch = std::getenv("VFG_BATCH");
+    impl->batch = !(batch && *batch && *batch == '0');
+    if (impl->verbose) {
       std::fprintf(stderr, "[vvfg] model tier: %s\n", impl->mode == 0 ? "low" : impl->mode == 1 ? "medium" : "high");
+      if (!impl->batch)
+        std::fprintf(stderr, "[vvfg] batch: off (VFG_BATCH=0), one in-between per call\n");
+    }
   }
   if (!impl->cuda.load(error) || !impl->nvf.open(config.proxyDir, error) || !impl->makeContext(error) ||
       !impl->allocate(error))

@@ -7,7 +7,7 @@
 | 八引擎吞吐与质量（RIFE 4.25/4.26/4.6、DLSS-G、XeSS-FG、VFG、FSR4；2026-11-19） | [../benchmark.md](../benchmark.md)、[../engines-benchmark.md](../engines-benchmark.md) | `bench\src\run_throughput.py`、`bench\src\run_quality.py`；原始数据 `bench\results\` |
 | vdlssg 纯生成（只测 GPU evaluate，排除传输；2026-11-22） | [vdlssg-gen-only-throughput.md](vdlssg-gen-only-throughput.md) | `work\bench_gen.py` + `work\gen_bench.vpy` |
 | 四引擎全流程 × 两卡（含源侧、上传、回读；2026-11-22） | [full-flow-engines.md](full-flow-engines.md) | `work\flow_bench.py` + `work\flow_one.py`、`work\make_flow_charts.py` |
-| VFG 档位与性能上限（`mode=` 三档、默认 medium、显存账本、分段瓶颈、四条被量过的加速路线；2026-11-25） | [vfg-perf-ceiling-2026-11-25.md](vfg-perf-ceiling-2026-11-25.md) | `vs-dlssg\test\engine_bench.py`（`VFG_MODE`/`VFG_TIMING`/`VFG_DIAG`）、TEMP 下 `rep.py`/`bench_all.bat`/`timing_probe.py` |
+| VFG 档位与性能上限（`mode=` 三档、默认 medium、显存账本、分段瓶颈、四条被量过的加速路线、流水式批量 −26%；2026-11-25/26） | [vfg-perf-ceiling-2026-11-25.md](vfg-perf-ceiling-2026-11-25.md) | `vs-dlssg\test\engine_bench.py`（`VFG_MODE`/`VFG_TIMING`/`VFG_DIAG`/`VFG_BATCH`）、TEMP 下 `rep.py`/`bench_all.bat`/`timing_probe.py`/`ab_batch.py` |
 
 全流程这一组在桌面程序全部关闭的空载状态下测量（有后台负载时整体慢 20% 以上）。
 

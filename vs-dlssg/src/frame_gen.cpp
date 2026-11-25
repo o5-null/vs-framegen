@@ -34,6 +34,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -238,6 +239,7 @@ const VSFrame* VS_CC getFrame(int n, int activationReason, void* instanceData, v
   }
   if (activationReason != arAllFramesReady) return nullptr;
 
+  const auto tFetch0 = std::chrono::steady_clock::now();
   const VSFrame* a = vsapi->getFrameFilter(srcA, data->node, frameCtx);
   if (!a) {
     vsapi->setFilterError(FG_NS ": failed to get the source frame", frameCtx);
@@ -261,6 +263,12 @@ const VSFrame* VS_CC getFrame(int n, int activationReason, void* instanceData, v
     }
     applyTimelineProps(vsapi, out, a, slot, mult, data->outFpsNum, data->outFpsDen);
     markFrame(out, vsapi, 0, 0, 0, slot);
+    if (std::getenv("VFG_TIMING")) {
+      const double total =
+          std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tFetch0).count();
+      std::fprintf(stderr, "[vvfg] frame slot=0 fetch=%.2f alloc=0.00 gen=0.00 tail=0.00 total=%.2f ms\n",
+                   total, total);
+    }
     vsapi->freeFrame(a);
     return out;
   }
@@ -353,6 +361,7 @@ const VSFrame* VS_CC getFrame(int n, int activationReason, void* instanceData, v
     if (mvB) vsapi->freeFrame(mvB);
   };
 
+  const auto tAlloc0 = std::chrono::steady_clock::now();
   VSFrame* out = vsapi->newVideoFrame(vsapi->getVideoFrameFormat(a), width, height, a, core);
   if (!out) {
     releaseInputs();
@@ -398,6 +407,7 @@ const VSFrame* VS_CC getFrame(int n, int activationReason, void* instanceData, v
 
   GenerateResult result{};
   std::string error;
+  const auto tGen0 = std::chrono::steady_clock::now();
   if (!data->session->generate(prev, cur, mvA ? &prevMv : nullptr, mvA ? &curMv : nullptr,
                                data->streamId, srcA, uint32_t(mult - 1), uint32_t(slot), format,
                                sink, result, error)) {
@@ -406,6 +416,7 @@ const VSFrame* VS_CC getFrame(int n, int activationReason, void* instanceData, v
     vsapi->setFilterError((FG_NS ": " + error).c_str(), frameCtx);
     return nullptr;
   }
+  const auto tGen1 = std::chrono::steady_clock::now();
 
   if (result.suppressed) {
     // The runtime decided interpolation would look worse here; keep the previous frame.
@@ -423,6 +434,15 @@ const VSFrame* VS_CC getFrame(int n, int activationReason, void* instanceData, v
 
   applyTimelineProps(vsapi, out, a, slot, mult, data->outFpsNum, data->outFpsDen);
   markFrame(out, vsapi, 1, 0, 0, slot);
+  if (std::getenv("VFG_TIMING")) {
+    const auto tEnd = std::chrono::steady_clock::now();
+    const auto ms = [](auto t1, auto t2) {
+      return std::chrono::duration<double, std::milli>(t2 - t1).count();
+    };
+    std::fprintf(stderr, "[vvfg] frame slot=%d fetch=%.2f alloc=%.2f gen=%.2f tail=%.2f total=%.2f ms\n",
+                 slot, ms(tFetch0, tAlloc0), ms(tAlloc0, tGen0), ms(tGen0, tGen1), ms(tGen1, tEnd),
+                 ms(tFetch0, tEnd));
+  }
   if (data->log) {
     std::fprintf(stderr,
                  "[" FG_NS "] frame %d from %d/%d slot %d/%d: %.2f ms (up %.2f rb %.2f gpu %.2f "
