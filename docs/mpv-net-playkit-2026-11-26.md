@@ -147,6 +147,50 @@ Ctrl+, 无效。
 
 **注意**：已在运行的实例不会热加载这些改动，改完必须重启 mpvnet.exe。
 
+## 把"补帧"放进 mpv.net 原生右键菜单（2026-11-26 第二次追加）
+
+上一节的 input.conf 处于 mpv.net 的"合并模式"（文件里没有 `#menu: ` 行），
+默认菜单可用，但**无法往里加条目**：PlayKit 那些 `#! 播放 > …` 注释不会被 mpv.net
+当菜单处理（`InputHelp.cs` 的 `IsShortMenuSyntax` 全仓库只读不写）。
+
+**mpv.net 的规则**（`src/MpvNet/InputConf.cs`）：
+
+- `HasMenu => Content.Contains("#menu: ")`；
+- 为假 → `GetContent()` 把内置默认表与用户绑定按 Command+Comment 合并后传给 libmpv；
+- 为真 → **原样返回文件内容**，完全不合并默认表（`GetBindings()` 直接 `return (confbindings, confbindings)`）。
+
+所以要让菜单里出现补帧条目，必须让 input.conf 自带**完整默认表**。做法：
+
+1. 先用合并模式跑一次带 `--msg-level=all=v` 的实例，libmpv 会逐行回显
+   `memory://` input-conf（`[v][input] Parsing input config file memory://` 之后
+   每行一条 `[v][input] <entry>`），这就是"默认表 + 我们的绑定"的最终文本。
+2. `work\mpvnet\extract-inputconf.py` 从日志抽出该段（注意日志里同一份内容会出现两次，
+   第二次以 `Input config file memory://` 开头，脚本在第二个段落处截断）。
+3. `work\mpvnet\build-inputconf.py` 生成最终 `portable_config\input.conf`：
+   加文件头说明、注释掉 `Ctrl+Shift+v update-clipboard`（mpv.net 的 mpv 无此命令）、
+   在「帮助」组之前插入「补帧」组，共 390 行、171 条 `#menu:` 条目。
+
+新增菜单（命令与 `menu.conf` 里 PlayKit 菜单完全一致）：
+
+```
+补帧 > VF 滤镜 > 清空滤镜            vf clr ""
+补帧 > VF 滤镜 > MVTools 快速 (CPU)  set hwdec auto-copy; vf set vapoursynth="~~/vs/MEMC_MVT_LQ.vpy"
+补帧 > VF 滤镜 > DLSS-G 2-6x         … MEMC_DLSSG_NV.vpy
+补帧 > VF 滤镜 > XeSS-FG 2x          … MEMC_XESSFG_NV.vpy
+补帧 > VF 滤镜 > VFG 2-6x            … MEMC_VFG_NV.vpy
+补帧 > VF 滤镜 > FSR4                … MEMC_FSR4.vpy
+补帧 > 倍数 > 跟随预设 / 2x…6x        script-message-to k7f_multi clear | set N
+```
+
+**验证**：日志确认 input.conf 被整体送入 libmpv（`[v][memory]` 逐行回显，无 `Config line` 解析错误）；
+用户在运行中的实例上右键，实测菜单里「帮助」之前出现「补帧」，展开后 6 个预设 + 6 个倍数项齐全，
+点 DLSS-G 预设画面正常。GUI 弹窗无法用 PrintWindow 截图（WPF Popup 是独立顶层窗口且需要前台焦点），
+这部分只能由真人确认。
+
+**维护要点**：input.conf 里不要删默认表，否则右键菜单会只剩「补帧」；想回到内置默认表，
+删掉全部含 `#menu: ` 的行（或删掉整个 input.conf）。首次以该形式启动时 mpv.net 会把
+`script-message mpv.net` 规范化为 `script-message-to mpvnet`，并另存 `input.conf.backup`。
+
 ## 目录与体积
 
 总 967.5 MB。主要构成：`vs-plugins` 317 MB、`Lib` 163.5 MB、`portable_config` 162.8 MB、
