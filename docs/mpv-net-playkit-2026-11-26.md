@@ -112,6 +112,41 @@ DLSS-G 运行时真实生成的，不是空跑。
 - 启动日志行：`k7f_vpypar: 已加载 VDLSSG，当前：倍数 4× …`，`k7f_vs: 已写入 VapourSynth 运行时配置`。
 - 菜单中已无 `playkit:` 命令：`findstr /S /I "playkit:" portable_config\*.conf` 无命中。
 
+## 键位与菜单（2026-11-26 追加修复）
+
+**症状**：右键没有 mpv.net 的上下文菜单，`Settings > 配置编辑器 / 输入编辑器 / 打开配置目录` 全部缺失，
+Ctrl+, 无效。
+
+**根因**：mpv.net 把配置目录的 `input.conf` 与内置默认键位/菜单表合并，然后以 `memory://`
+形式作为 libmpv 的 `input-conf` 传入（`Player.cs:105-121`，`InputConf.GetContent()`）。
+原包 `portable_config\mpv.conf:5` 的 `input-conf = "~~/input_uosc.conf"` 优先级更高，
+把整张表换成 PlayKit 的那份：默认段实测 208 条绑定里只有 PlayKit 条目，
+`MBTN_RIGHT -> show-menu`、`Ctrl+, -> show-conf-editor` 一条都不剩（IPC `get_property input-bindings` 取证）。
+命令本身是好的：`script-message-to mpvnet show-conf-editor` 能弹出可见的 "Config Editor" 窗口。
+
+**修复**：
+1. `portable_config\mpv.conf` 注释掉 `input-conf`，改由 mpv.net 自己组表。
+2. 新增 `portable_config\input.conf`（由 `input_uosc.conf` 派生），mpv.net 会把它与内置默认表合并，
+   于是右键菜单、Ctrl+,、`k`（编辑 input.conf）、`Ctrl+f`（打开配置目录）全部回来，
+   PlayKit 的 `! * ( ) _` 等 VF 预设键位照旧。
+3. 右键归属：`MBTN_RIGHT` = mpv.net 菜单；`Alt+MBTN_RIGHT` = PlayKit 的 `context-menu`
+   （menu.conf 的 VF/倍数菜单）；`Ctrl+MBTN_RIGHT` = uosc 菜单。
+4. `Ctrl+Shift+v`（`update-clipboard`）在 mpv.net 自带的 mpv 构建里没有该命令，已停用；
+   剪贴板加载用 mpv.net 自带的 Ctrl+v / Ctrl+Shift+v。
+
+**取证**：IPC `input-bindings` 共 208 条，其中 31 条指向 `mpvnet` 脚本，
+含 `MBTN_RIGHT -> script-message-to mpvnet show-menu`（priority 21，uosc 的同键绑定优先级 -1，不生效）、
+`Ctrl+, -> show-conf-editor`、`Alt+MBTN_RIGHT -> context-menu`、`! -> MEMC_MVT_LQ.vpy`。
+`input-conf` 属性值以 `o script-message-to mpvnet open-files  #menu: 文件 > 打开文件...` 开头，
+说明菜单语法已进入 libmpv 的表。修复后重跑 MVTools / DLSS-G 预设，日志
+`[vapoursynth] initialized.`、无 `[e]/[f]`，确认键位改动没有影响补帧通路。
+
+**仍存在的键位覆盖**（PlayKit 优先，均为有意保留）：`c`（音频延迟，mpv.net 默认编辑 mpv.conf）、
+`Ctrl+i`（uosc 按键列表，默认输入编辑器）、`Ctrl+s`（截屏，默认停止）。
+配置编辑器统一走右键菜单 `设置` 或 Ctrl+,。
+
+**注意**：已在运行的实例不会热加载这些改动，改完必须重启 mpvnet.exe。
+
 ## 目录与体积
 
 总 967.5 MB。主要构成：`vs-plugins` 317 MB、`Lib` 163.5 MB、`portable_config` 162.8 MB、
