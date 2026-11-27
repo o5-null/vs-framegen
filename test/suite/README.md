@@ -10,6 +10,7 @@ pytest 套件：把仓库里散落的一次性脚本收拾成**可重复、可�
 | 环境 | python 依赖、VS 绑定、mpv 的 vapoursynth 支持、vspipe、ffmpeg、样片、playkit stage | `test_00_env.py` |
 | VapourSynth | 无头出帧、日志回传、帧属性、插件加载与报错 | `test_10_vs_headless.py` |
 | mpv 输出 | `vo=image` 落盘、帧数/命名/尺寸、容器帧率、identity 无损 | `test_20_mpv_frames.py` |
+| 显示路径 | gpu-next/d3d11 逐帧截图（真实显示帧，16bit RGBA）与 `vo=image` 对比 | `test_25_display.py` |
 | 画质判定 | 矩阵/范围标签、10bit 位深、VS 失败必须被抓到 | `test_30_color.py` |
 | 时间轴 | 重复帧、黑帧、冻结画面、真片推进 | `test_40_temporal.py` |
 | playkit | stage 里的 python 预设层、stage 的 mpv + identity vpy | `test_50_playkit.py` |
@@ -20,7 +21,7 @@ pytest 套件：把仓库里散落的一次性脚本收拾成**可重复、可�
 ## 跑法
 
 ```powershell
-# 全套（约 15 秒，含 GPU 用例；缺依赖的用例会 skip 而不是 error）
+# 全套（约 30 秒，含 GPU 用例；缺依赖的用例会 skip 而不是 error）
 .venv\Scripts\python.exe -m pytest test\suite
 
 # 按标记
@@ -59,6 +60,7 @@ test\suite\run.ps1 -Case test_30   # 只跑匹配的文件名
 ```
 mpv.log        mpv 的 --log-file
 frames\        00000001.png …（vo=image 逐帧输出）
+shots\         00000001.png …（IPC 截图：真实显示路径，RGBA 16bit）
 script.vpy     该场景实际喂给 VS 的脚本
 vs.log         vpy 里 core.add_log_handler 收到的日志（含 VRAM {...} 与 DEBUG {...} 行）
 vs_info.json   VS/python/可执行文件/cwd 现场
@@ -113,6 +115,8 @@ lib/paths.py     外部依赖定位（全部带 env 覆盖）
 lib/runner.py    子进程封装（超时/退出码/日志落盘/可选 procdump/内存采样）
 lib/memory.py    进程树内存（psapi）与每进程显存（性能计数器）采样
 lib/mpv.py       mpv 命令行 + 日志解析（converted / fps / fatal / 落盘帧）
+lib/ipc.py       mpv JSON IPC（命名管道：连接/命令/属性，按 request_id 对齐应答）
+lib/display.py   真实显示路径逐帧截图（gpu-next/d3d11 + frame-step + screenshot-to-file）
 lib/vpy.py       生成 vpy（日志钩子 + 逐帧属性/差异 dump + NVML 显存采样）与 vspipe 调用
 lib/frames.py   PNG 序列 → numpy（借 ffmpeg 解码，支持 8/16bit）
 lib/metrics.py  亮度/通道均值/重复帧/黑帧/闪烁指标

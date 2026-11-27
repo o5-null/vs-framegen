@@ -20,6 +20,18 @@ _PNG_RE = re.compile(r"^(\d+)\.png$", re.IGNORECASE)
 #: PNG color type -> (通道数, 名字)
 COLOR_TYPES = {0: (1, "gray"), 2: (3, "rgb"), 4: (2, "graya"), 6: (4, "rgba")}
 
+#: (PNG 布局, 是否 16bit) -> ffmpeg 裸像素格式；mpv 的截图是 RGBA，不能当 RGB 读
+_PIX_FMTS = {
+    ("rgb", False): "rgb24",
+    ("rgb", True): "rgb48le",
+    ("rgba", False): "rgba",
+    ("rgba", True): "rgba64le",
+    ("gray", False): "gray",
+    ("gray", True): "gray16le",
+    ("graya", False): "ya8",
+    ("graya", True): "ya16le",
+}
+
 
 @dataclass(frozen=True)
 class FrameInfo:
@@ -71,13 +83,8 @@ def load_sequence(frames_dir: Path, *, limit: int | None = None) -> np.ndarray:
         files = files[:limit]
 
     info = read_png_info(files[0])
-    depth16 = info.bit_depth == 16
-    if info.kind in ("rgb", "rgba"):
-        pix_fmt = "rgb48le" if depth16 else "rgb24"
-        channels = 3 if info.kind == "rgb" else 4
-    else:
-        pix_fmt = "gray16le" if depth16 else "gray"
-        channels = 1 if info.kind == "gray" else 2
+    pix_fmt = _PIX_FMTS[(info.kind, info.bit_depth == 16)]
+    channels = info.channels
 
     raw = Path(frames_dir) / "_decode.raw"
     exe = _ffmpeg()
@@ -94,7 +101,7 @@ def load_sequence(frames_dir: Path, *, limit: int | None = None) -> np.ndarray:
     if proc.returncode != 0:
         raise AssertionError(f"ffmpeg 解码帧失败: {proc.stderr.strip()}")
 
-    dtype = np.uint16 if depth16 else np.uint8
+    dtype = np.uint16 if info.bit_depth == 16 else np.uint8
     expected = len(files) * info.height * info.width * channels
     data = np.fromfile(raw, dtype=dtype, count=expected)
     raw.unlink(missing_ok=True)

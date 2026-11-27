@@ -19,6 +19,8 @@
 - **断言不看图、不看人眼**：mpv 用 `--vo=image` 把每帧落成 PNG，再由
   `lib/frames.py` 借 ffmpeg 解码成 numpy，`lib/metrics.py` 算亮度/通道均值/重复帧/
   黑帧/闪烁。新用例要判定画面就用这条链，不要引入 cv2/PIL。
+  需要「真实显示路径」（色彩管理/缩放/抖动之后的帧）时用 `lib/display.py`，见下面的
+  「显示路径截图」一节。
 - 每个用例有自己的产物目录 `test\artifacts\<时间戳>\<nodeid>\`（已 gitignore），
   失败时先看里面的 `mpv.log` / `vs.log` / `script.vpy`，其次 `argv.txt`。
 - 缺依赖用 `lib/util.require*()` 转成 skip；**只有真的坏了才 fail**（例如
@@ -66,6 +68,24 @@
     `Resize error 3074: no path between colorspaces`。
 11. **不要用 `mpv --version` 判断 VS 支持**（构建选项行不打印），用
     `mpv --no-config --vf=help` 找 `vapoursynth`。
+12. **真实显示路径的截图走 IPC**（`lib/display.py`）：`--input-ipc-server=\\.\pipe\<名>`
+    + `frame-step` + `screenshot-to-file shots/N.png video`，需要
+    `--screenshot-sw=no --screenshot-high-bit-depth=yes --keep-open=yes --idle=yes --pause=yes`。
+    四个坑：管道要先 `os.listdir(r"\\.\pipe\\")` 确认存在再 open（不存在时 `open()` 永久阻塞）；
+    截图是 **RGBA 16bit PNG**，解码要用 `rgba64le`；**不能加 `--window-minimized=yes`**
+    （与 `--vo=gpu-next` 同用就截不到帧）；截图命令要**重试**而不是等
+    `estimated-frame-number`（多数 VO 不暴露该属性，会白等满超时）。
+
+## 显示路径截图
+
+`--vo=image` 落的是软件转换后的帧；`--vo=gpu-next --gpu-api=d3d11` 截的是真正
+送给显示器的帧（经 libplacebo 色彩管理/缩放/抖动）。同一纯色源上两条路径的三通道
+均值实测差 ≤0.0022，所以 `test_25_display.py` 用 0.01 作阈值做数值对比，
+色彩/亮度/闪烁这类"原本只能人眼看"的问题可以自动判定。
+
+`vf-metadata/vapoursynth.00` 通过 IPC 也查不到（`error accessing property`），
+`--term-playing-msg` 的 `${=vf-metadata}` 更是永远为空——**帧属性只能从 vs.log 的
+`DEBUG {...}` / `PROPS {...}` 行读**。
 
 ## 调试与 dump
 

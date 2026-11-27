@@ -74,13 +74,16 @@ uv pip install --python .venv\Scripts\python.exe vapoursynth==74 numpy vsrepo
 `test\suite` 是仓库唯一的自动化测试入口（pytest）：
 
 ```
-.venv\Scripts\python.exe -m pytest test\suite          # 全套，约 15 秒
+.venv\Scripts\python.exe -m pytest test\suite          # 全套，约 30 秒
 .venv\Scripts\python.exe -m pytest test\suite -m "not slow"
 ```
 
-- 覆盖：环境自检 / VS 无头出帧与插件 / mpv 落盘与转换 / 色彩矩阵与位深 / 重复帧与黑帧 /
-  playkit stage / 吞吐 / vdlssg FrameGen / k7sfunc（`SCDetect2` 切镜）。判定全部是数值
-  （PNG 序列 → numpy），不靠人眼。
+- 覆盖：环境自检 / VS 无头出帧与插件 / mpv 落盘与转换 / 色彩矩阵与位深 / 真实显示路径截图 /
+  重复帧与黑帧 / playkit stage / 吞吐 / vdlssg FrameGen / k7sfunc（`SCDetect2` 切镜）。
+  判定全部是数值（PNG 序列 → numpy），不靠人眼。
+- 需要「真实显示路径」的帧（libplacebo 色彩管理/缩放/抖动之后）时用
+  `lib/display.py:capture_display()`：mpv JSON IPC 驱动 `frame-step` +
+  `screenshot-to-file`，落 RGBA 16bit PNG，与 `--vo=image` 软件路径做数值对比。
 - `Run.vpy(..., debug=True)` 会在 vpy 里逐帧算帧间差并写 `DEBUG {...}` 行（切镜标志 + 重复帧），
   摘要进 `meta.json` 的 `debug`；`VFI_DEBUG=0` 关闭，`VFI_DEBUG_DUP_TOL` 调重复判定阈值。
 - 每个子进程都带占用采样：`mem.csv` 是进程树内存（0.2s）与可选每进程显存，`meta.json` 的
@@ -105,3 +108,8 @@ uv pip install --python .venv\Scripts\python.exe vapoursynth==74 numpy vsrepo
    `Could not get script output node` / `Disabling filter`）——调试先 grep 这三句。
 6. `--vf=vapoursynth=` 的参数里不能出现反斜杠或盘符（`:` 是参数分隔符）。
 7. `mpv --version` 不打印构建选项，判断 VS 支持用 `mpv --no-config --vf=help`。
+8. 想把「真正显示的画面」抓成图：走 JSON IPC（`--input-ipc-server=\\.\pipe\<名>`）
+   驱动 `frame-step` + `screenshot-to-file`，需 `--screenshot-sw=no`；截图是 RGBA 16bit PNG，
+   且**不要**加 `--window-minimized=yes`（与 gpu-next 同用截不到帧）。
+   `${=vf-metadata}`（`--term-playing-msg`）和 IPC 的 `vf-metadata/vapoursynth.00` 都拿不到
+   帧属性，帧属性只能读 vs.log 的 `DEBUG`/`PROPS` 行。
