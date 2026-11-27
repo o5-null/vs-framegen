@@ -194,3 +194,36 @@ Stages = "f"         # f/u/t 的组合，顺序固定：补帧 → 超分 → �
 - 右键菜单预设（`mpv-playkit/manifests/config.yml` 的 `aji_rife/aji_upscale/aji_tfix/aji_stack`）
   不再写 `vf set` 命令，而是 `script-message-to k7f_vpypar set …` + `apply`，由面板统一建链。
 
+### 7.1 换滤镜时 mpv 断言：插件没放 `mapGetNode` 的引用（已修）
+
+现象：只要链里有 vsaji，**任何**销毁路径都会 abort——播放中替换/清空 vf、换片、正常退出，
+mpv 的 debug 构建弹 `Assertion failed! … vf_vapoursynth.c Line: 582 Expression: !p->in_node_active`
+（用户看到的是弹窗；无窗口测试里表现为 `pipe EOF`、日志停在 `all requests terminated`、
+没有 `uninitialized.`）。纯 `std.Expr` 三层链 0% 触发，单层 aji 100% 触发，与预取环
+（`AJI_PREFETCH=0` 仍崩）、与几层、与是否正在播放都无关。
+
+根因：`plugin.cpp` 的 `chainCreate()` 用 `mapGetNode(in, "clip")` 拿到一份输入节点引用，存进
+`AjiData::node`；`createVideoFilter2()` 的 deps 另持一份。成功路径只 `mapSetNode()` +
+`freeNode(outNode)`，销毁回调 `rifeFree()` 也不放 `d->node` → 每个实例对上游节点永久多持
+一个引用，上游节点 refcount 不归零，VS 不会调用输入滤镜的 free 回调，
+`p->in_node_active`（`vf_vapoursynth.c:649` 置 true、`:541` 置 false）永远是 true。
+`destroy_vs()` 在 `drv->unload(p)` 之后立刻断言，必炸。
+
+修法（`vsaji/src/plugin.cpp`，`rifeFree()` 开头）：
+
+```cpp
+if (d->node) { vsapi->freeNode(d->node); d->node = nullptr; }
+```
+
+不要改 mpv：删断言只是把确定的 abort 换成 UAF，等 `in_node_active` 变 false 则永远不会变。
+面板侧也不必（也无从）规避时机——`vf set ""`、先 pause、`vf remove`+`vf add` 都只是多撞一次。
+
+验证（`--vo=null` 与真窗口 `--vo=gpu` 都跑过）：`uninit` 从 0 变 1；播放中整链替换耗时
+0.08 s、帧号继续涨；播放中清空 vf 0.07 s；面板 400 帧内连切 5 次 stages/framegen，3 条
+`uninitialized.`、无断言。`vsrife/src/plugin.cpp:281-302` 是同一处泄漏的模板，若那条链在用
+需同样处理。
+
+排查工具：`VSAJI_TRACE=<文件路径>` 会追加 `free: …` / `clear: …` 阶段日志（`src/aji_debug.h`，
+不设环境变量时零开销）；mpv 侧可用 `--input-ipc-server` + `set_property vf` 在播放中复现。
+
+
