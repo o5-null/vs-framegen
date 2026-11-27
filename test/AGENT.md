@@ -33,8 +33,12 @@
 1. **vpy 的画面必须从 `video_in` 派生。** 纯 `core.std.BlankClip(...)` 直接输出，
    mpv-lazy 会以 `0xC0000409`（rc 3221226505）崩溃且不留日志。合成画面用
    `core.std.Expr(video_in, ["16","128","128"])` 之类把每平面钉成常数。
-2. **`std.ModifyFrame` 在 mpv 下必挂**（rc=2，日志只有 `initiate EOF`，0 帧）；
-   vspipe 下正常。设帧属性改用 `core.std.SetFrameProp(clip, prop="_Matrix", intval=1)`。
+2. **`clips[]` 形参的函数不能写成"绑定调用 + 位置参数"**。例如
+   `clip.std.Expr([clip, prev], ["x y - abs"])` 报 `invalid literal for int() with base 10`，
+   `clip.std.ModifyFrame(clip, [clip], sel)` 报 `ModifyFrame: Too many unnamed arguments specified`
+   ——参数会错位到下一个形参上。正确写法是 `core.std.Expr([...], [...])`，
+   或关键字形式 `clip.std.ModifyFrame(clips=[...], selector=sel)`（k7 的 `SCDetect2` 就是这么写的，
+   在 mpv 链路实测可用）。设常量帧属性也可以用 `core.std.SetFrameProp(clip, prop="_Matrix", intval=1)`;
    逐帧 dump 属性用 `std.FrameEval(fn, clip)`（注意第二个参数不能是空数组）。
 3. **VS 输出帧数不得短于输入**：mpv 按输入时间轴请求帧，脚本更短就报
    `Invalid frame number N requested` 并禁用滤镜。冻结画面用
@@ -96,3 +100,33 @@
   （FrameGen 1080p/200 帧实测 delta ≈ 370MB），绝对峰值里混着别的进程。
 - 纯 `--vo=image` + 无 vpy 的场景没有 `vram` 字段（没有脚本就没有采样点）；要看显存就带一个
   identity vpy，或走 `--vo=gpu` 让 OS 计数器有机会命中。
+
+## debug 模式：逐帧差异 / 切镜 / 重复帧
+
+`Run.vpy(body, debug=True)` 会在脚本最后一个 `set_output()` 前插入 `debug_dump(clip)`
+（`lib/vpy.py` 的 `DEBUG_DEF`），对每一帧算「与前一帧的平均绝对差」并写一行
+`DEBUG {"frame","diff","scene_prev","scene_next","dup"}` 到 `vs.log`：
+
+- `diff` 由 `core.std.Expr([clip, prev], ["x y - abs"])` 的 `PlaneStats` 均值给出（0–1；
+  平坦色块的相邻帧通常是 0）。
+- `scene_prev` / `scene_next` 直接取上游（例如 `k7f.SCDetect2`）写好的
+  `_SceneChangePrev` / `_SceneChangeNext`；没有上游检测器时恒为 0。
+- `dup` = `diff <= VFI_DEBUG_DUP_TOL`（默认 `1e-6`）；**第 0 帧永远不算重复**。
+- 默认开启，`VFI_DEBUG=0` 关闭；`Run.debug()` 返回摘要
+  （`samples/dups/scene_prev/scene_next/min_diff/median_diff/max_diff`），`Run.debug_rows()`
+  返回原始行，mpv 侧对应 `MpvRun.debug`，两者都会落进 `meta.json` 的 `debug`。
+- **同一帧会被 VS 重复求值**（vspipe 每帧 2 次、mpv 每帧 4 次），所以 `read_debug()`
+  按帧号去重后再统计；自己写解析时不要按行数算帧数。
+- `DEBUG_DEF` 是**直接拼接**进脚本头部的（不像 `PROPS_DEF` 会过 `.format()`），
+  所以里面的花括号写单个 `{ }`，写成 `{{ }}` 会得到 `TypeError: unhashable type: 'dict'`。
+
+## k7sfunc 用例（test_80_k7.py）
+
+- 仓库 `.venv` 里**没有** k7sfunc，`paths.k7sfunc_src()` 按
+  `VFI_K7` → `<repo>\k7sfunc\src` → playkit stage 的 `Lib\site-packages` 解析；
+  用例正文用 `sys.path.insert(0, "<posix 路径>")` 引入（即 `_prelude()`）。
+- 已覆盖：`k7f.__version__` / `PLAYKIT_PRESETS` / `PLAYKIT_RUN` 可用性、
+  `SCDetect2` 在硬切点（帧 3→4）写 `_SceneChangeNext[3]` / `_SceneChangePrev[4]`、
+  静态片不误报、`threshold` 越界立刻 `ValueError`、mpv 真链路里 SCDetect2 可用，
+  以及 debug 模式同时给出切镜与重复帧数据。
+- k7sfunc 里**没有**现成的重复帧检测函数，重复帧由 `debug_dump()` 的 `diff` 判定。

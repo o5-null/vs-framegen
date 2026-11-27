@@ -103,6 +103,28 @@ def mpv() -> Path | None:
     return found
 
 
+def k7sfunc_src() -> Path | None:
+    """k7sfunc 包的**可导入目录**（其下应有 ``k7sfunc/__init__.py``）。
+
+    查找顺序：``VFI_K7`` → ``k7sfunc/src`` → stage 的 ``Lib/site-packages``。
+    ``.venv`` 里没装 k7sfunc，所以无头 vspipe 脚本得自己把它挂进 ``sys.path``。
+    """
+    if "k7" in _cache:
+        return _cache["k7"]
+
+    cand: list[Path] = []
+    raw = os.environ.get("VFI_K7")
+    if raw:
+        cand.append(Path(raw).expanduser())
+    cand.append(repo_root() / "k7sfunc" / "src")
+    if playkit_stage():
+        cand.append(playkit_stage() / "Lib" / "site-packages")
+
+    found = next((p for p in cand if (p / "k7sfunc" / "__init__.py").exists()), None)
+    _cache["k7"] = found
+    return found
+
+
 def sample_video() -> Path | None:
     """默认测试片：``VFI_VIDEO`` → media\\sintel_trailer_1080p.mp4。"""
     raw = os.environ.get("VFI_VIDEO")

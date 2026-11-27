@@ -58,8 +58,9 @@ class Run:
         self.dir.mkdir(parents=True, exist_ok=True)
 
     # ---- 脚本 ----
-    def vpy(self, body: str, *, props: bool = False, name: str = "script.vpy") -> Path:
-        return vpylib.write_script(self.dir / name, body, props=props)
+    def vpy(self, body: str, *, props: bool = False, debug: bool = False,
+            name: str = "script.vpy") -> Path:
+        return vpylib.write_script(self.dir / name, body, props=props, debug=debug)
 
     def vpy_text(self) -> str:
         path = self.dir / "script.vpy"
@@ -79,6 +80,7 @@ class Run:
         result = vpylib.run_vspipe(self.case.vspipe_exe, script or (self.dir / "script.vpy"),
                                    cwd=self.dir, **kwargs)
         self._attach_vram(result)
+        self._attach_debug(result)
         result.save(self.dir)
         return result
 
@@ -87,6 +89,12 @@ class Run:
         summary = vpylib.vram_summary(vpylib.read_vram(self.dir))
         if summary:
             result.extra["vram"] = {k: v for k, v in summary.items() if k != "rows"}
+
+    def _attach_debug(self, result: Result) -> None:
+        """把切镜 / 重复帧检测结果压成摘要塞进 meta。"""
+        summary = vpylib.debug_summary(vpylib.read_debug(self.dir))
+        if summary:
+            result.extra["debug"] = summary
 
     # ---- 产物 ----
     def frames(self, *, limit: int | None = None):
@@ -111,6 +119,14 @@ class Run:
     def vram(self) -> dict:
         """VS 脚本内的显存采样摘要（基线/峰值/增量），无采样时为空。"""
         return vpylib.vram_summary(vpylib.read_vram(self.dir))
+
+    def debug(self) -> dict:
+        """逐帧调试摘要（切镜帧 / 重复帧 / 帧差分布），未开 debug 时为空。"""
+        return vpylib.debug_summary(vpylib.read_debug(self.dir))
+
+    def debug_rows(self) -> list[dict]:
+        """逐帧调试原始行。"""
+        return vpylib.read_debug(self.dir)
 
     def copy(self, src: Path, name: str | None = None) -> Path:
         dst = self.dir / (name or Path(src).name)

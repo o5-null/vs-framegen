@@ -155,30 +155,81 @@ def _vram_loop():
 _vram_loop()
 '''
 
+#: 脚本内逐帧调试采样：切镜标志 + 重复帧检测，写 ``DEBUG {...}`` 行。
+#: 重复帧用相邻帧差的绝对均值判定（``std.Expr`` 求 |x-y| 再 ``PlaneStats``），
+#: 不依赖 k7 内部状态；切镜标志直接读上游属性（``SCDetect2`` 等打的
+#: ``_SceneChangePrev`` / ``_SceneChangeNext``）。整段不许用 ``std.ModifyFrame``
+#: ——它在 mpv 的 VS 桥下必然静默 EOF。
+DEBUG_DEF = '''
+DEBUG_OFF = ("0", "false", "no", "off")
+
+try:
+    DEBUG_DUP_TOL = float(os.environ.get("VFI_DEBUG_DUP_TOL", "1e-6"))
+except ValueError:
+    DEBUG_DUP_TOL = 1e-6
+
+
+def debug_dump(clip):
+    """逐帧输出切镜标记与重复帧检测数据（``DEBUG {...}``）。"""
+
+    def _fn(n, f):
+        diff = float(f.props.get("VFIDebugAverage", 0.0))
+        row = {
+            "frame": n,
+            "diff": round(diff, 6),
+            "scene_prev": int(f.props.get("_SceneChangePrev", 0) or 0),
+            "scene_next": int(f.props.get("_SceneChangeNext", 0) or 0),
+            # 第 0 帧没有前一帧可比较，固定不算重复
+            "dup": n > 0 and diff <= DEBUG_DUP_TOL,
+        }
+        _LOG.write("DEBUG " + json.dumps(row) + "\\n")
+        return clip
+
+    if os.environ.get("VFI_DEBUG", "1").strip().lower() in DEBUG_OFF:
+        return clip
+    prev = clip.std.DuplicateFrames([0])[:-1]
+    # 注意用 core.std.Expr：绑定调用 ``clip.std.Expr`` 会把 clip 顶到位置参数上，
+    # clips[] 形式的函数在 R74 里会按错参数解析（ValueError: invalid literal for int()）。
+    diff = core.std.Expr([clip, prev], ["x y - abs"])
+    stats = diff.std.PlaneStats(plane=0, prop="VFIDebug")
+    return clip.std.FrameEval(_fn, stats)
+'''
+
+_DEBUG_RE = re.compile(r"^DEBUG (\{.*\})$", re.MULTILINE)
+
 _VRAM_RE = re.compile(r"^VRAM (\{.*\})$", re.MULTILINE)
 
 _FPS_RE = re.compile(r"^FPS:\s*(\d+)/(\d+)", re.MULTILINE)
 
 
 def header() -> str:
-    return HEADER_CORE + PROPS_DEF.format(names=list(PROP_NAMES)) + VRAM_DEF
+    return HEADER_CORE + PROPS_DEF.format(names=list(PROP_NAMES)) + DEBUG_DEF + VRAM_DEF
 
 
-def render(body: str, *, props: bool = False) -> str:
-    """拼出完整脚本：头部 + body；``props=True`` 会在输出前插入逐帧属性采集。"""
+def render(body: str, *, props: bool = False, debug: bool = False) -> str:
+    """拼出完整脚本：头部 + body。
+
+    ``props=True`` 插入逐帧属性采集，``debug=True`` 插入切镜 + 重复帧检测，
+    两者都挂在最后一个 ``set_output()`` 之前（先 debug 后 props，属性不受影响）。
+    """
     text = header() + "\n" + body.strip() + "\n"
+    inserts = []
+    if debug:
+        inserts.append("clip = debug_dump(clip)\n")
     if props:
+        inserts.append("clip = dump_props(clip)\n")
+    if inserts:
         idx = text.rfind(SET_OUTPUT)
         if idx < 0:
-            raise ValueError("props=True 时脚本正文必须以 clip.set_output() 结尾")
-        text = text[:idx] + "clip = dump_props(clip)\n" + text[idx:]
+            raise ValueError("props/debug 打开时脚本正文必须以 clip.set_output() 结尾")
+        text = text[:idx] + "".join(inserts) + text[idx:]
     return text
 
 
-def write_script(path: Path, body: str, *, props: bool = False) -> Path:
+def write_script(path: Path, body: str, *, props: bool = False, debug: bool = False) -> Path:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(render(body, props=props), encoding="utf-8")
+    path.write_text(render(body, props=props, debug=debug), encoding="utf-8")
     return path
 
 
@@ -294,6 +345,46 @@ def read_vram(cwd: Path) -> list[dict]:
         except json.JSONDecodeError:
             continue
     return rows
+
+
+def read_debug(cwd: Path) -> list[dict]:
+    """读脚本里的逐帧调试行（``DEBUG {...}``），按帧号去重。
+
+    VS 会因 prop_src / 多次请求而重复求值同一帧（实测 vspipe 每帧 2 次、
+    mpv 里有 4 次），日志因此会有重复行，这里只保留每帧第一次的记录。
+    """
+    rows: list[dict] = []
+    seen: set[int] = set()
+    for match in _DEBUG_RE.finditer(read_vs_log(cwd)):
+        try:
+            row = json.loads(match.group(1))
+        except json.JSONDecodeError:
+            continue
+        frame = int(row.get("frame", -1))
+        if frame in seen:
+            continue
+        seen.add(frame)
+        rows.append(row)
+    rows.sort(key=lambda r: r.get("frame", 0))
+    return rows
+
+
+def debug_summary(rows: list[dict]) -> dict:
+    """把逐帧调试行压成「切镜帧 / 重复帧 / 帧差分布」。"""
+    if not rows:
+        return {}
+    diffs = sorted(float(r.get("diff", 0.0)) for r in rows)
+    mid = len(diffs) // 2
+    median = diffs[mid] if len(diffs) % 2 else (diffs[mid - 1] + diffs[mid]) / 2.0
+    return {
+        "samples": len(rows),
+        "dups": [int(r["frame"]) for r in rows if r.get("dup")],
+        "scene_prev": [int(r["frame"]) for r in rows if r.get("scene_prev")],
+        "scene_next": [int(r["frame"]) for r in rows if r.get("scene_next")],
+        "min_diff": round(diffs[0], 6),
+        "median_diff": round(median, 6),
+        "max_diff": round(diffs[-1], 6),
+    }
 
 
 def vram_summary(rows: list[dict]) -> dict:

@@ -111,6 +111,11 @@ class MpvRun:
         """VS 脚本内 NVML 采到的整卡显存摘要（基线/峰值/增量）。"""
         return self.extra.get("vram") or self.result.extra.get("vram") or {}
 
+    @property
+    def debug(self) -> dict:
+        """逐帧调试摘要（切镜帧 / 重复帧 / 帧差分布）。"""
+        return self.extra.get("debug") or self.result.extra.get("debug") or {}
+
     # ---- 帧视图 ----
     def frame_files(self) -> list[Path]:
         from .frames import list_frames
@@ -210,6 +215,10 @@ def run_mpv(
         summary = {k: v for k, v in vram.items() if k != "rows"}
         out.extra["vram"] = summary
         result.extra["vram"] = summary  # 落进 meta.json
+    debug = vpy.debug_summary(vpy.read_debug(cwd))
+    if debug:
+        out.extra["debug"] = debug
+        result.extra["debug"] = debug  # 落进 meta.json
     out.save()
     return out
 

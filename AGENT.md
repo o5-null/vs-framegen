@@ -79,7 +79,10 @@ uv pip install --python .venv\Scripts\python.exe vapoursynth==74 numpy vsrepo
 ```
 
 - 覆盖：环境自检 / VS 无头出帧与插件 / mpv 落盘与转换 / 色彩矩阵与位深 / 重复帧与黑帧 /
-  playkit stage / 吞吐 / vdlssg FrameGen。判定全部是数值（PNG 序列 → numpy），不靠人眼。
+  playkit stage / 吞吐 / vdlssg FrameGen / k7sfunc（`SCDetect2` 切镜）。判定全部是数值
+  （PNG 序列 → numpy），不靠人眼。
+- `Run.vpy(..., debug=True)` 会在 vpy 里逐帧算帧间差并写 `DEBUG {...}` 行（切镜标志 + 重复帧），
+  摘要进 `meta.json` 的 `debug`；`VFI_DEBUG=0` 关闭，`VFI_DEBUG_DUP_TOL` 调重复判定阈值。
 - 每个子进程都带占用采样：`mem.csv` 是进程树内存（0.2s）与可选每进程显存，`meta.json` 的
   `memory`/`vram` 是峰值摘要；显存以 VS 脚本内的 NVML 整卡采样为准（`delta_mb` 才是本次抬升，
   `nvidia-smi` 的 per-process 在 WDDM 上恒 `[N/A]`）。细节见 `test\AGENT.md`。
@@ -91,8 +94,10 @@ uv pip install --python .venv\Scripts\python.exe vapoursynth==74 numpy vsrepo
 ## mpv + VapourSynth 实测坑（测试/调试通用）
 
 1. vpy 画面必须由 `video_in` 派生：纯 `BlankClip` 直接输出会让 mpv-lazy 崩在 `0xC0000409`。
-2. `std.ModifyFrame` 在 mpv 的 VS 桥下必挂（rc=2、0 帧）；改属性用 `std.SetFrameProp`，
-   逐帧 dump 用 `std.FrameEval(fn, clip)`（第二个参数不能是空数组）。
+2. `clips[]` 形参的函数不能"绑定调用 + 位置参数"（`clip.std.Expr([...], [...])` /
+   `clip.std.ModifyFrame(clip, [...], sel)` 会参数错位报错）；用 `core.std.Expr(...)` 或
+   `clip.std.ModifyFrame(clips=[...], selector=sel)`。逐帧 dump 用 `std.FrameEval(fn, clip)`
+   （第二个参数不能是空数组）。
 3. VS 输出帧数不能短于输入（mpv 按输入时间轴请求帧）；冻结画面用 `std.Loop(video_in[0:1], 400)`。
 4. VS 的 `_Matrix`/`_ColorRange` 属性不参与 mpv 的 VO 转换，色彩标签用 `--vf=format=...`
    （`colormatrix` 没有 `bt.2020`，用 `bt.2020-ncl`）。

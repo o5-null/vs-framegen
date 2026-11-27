@@ -15,6 +15,7 @@ pytest 套件：把仓库里散落的一次性脚本收拾成**可重复、可�
 | playkit | stage 里的 python 预设层、stage 的 mpv + identity vpy | `test_50_playkit.py` |
 | 吞吐 | 60 帧 identity 链的 fps 与落盘帧数 | `test_60_throughput.py` |
 | 引擎 | vdlssg FrameGen 2×：帧数/帧率翻倍、`_Duration`、经 mpv 链路 | `test_70_vdlssg.py` |
+| k7sfunc | `k7f` 导入/预设、`SCDetect2` 切镜属性、阈值校验、mpv 链路 | `test_80_k7.py` |
 
 ## 跑法
 
@@ -59,7 +60,7 @@ test\suite\run.ps1 -Case test_30   # 只跑匹配的文件名
 mpv.log        mpv 的 --log-file
 frames\        00000001.png …（vo=image 逐帧输出）
 script.vpy     该场景实际喂给 VS 的脚本
-vs.log         vpy 里 core.add_log_handler 收到的日志（含 VRAM {...} 采样行）
+vs.log         vpy 里 core.add_log_handler 收到的日志（含 VRAM {...} 与 DEBUG {...} 行）
 vs_info.json   VS/python/可执行文件/cwd 现场
 props.json|PROPS 行   逐帧关键属性（_Duration*/_Matrix/_SceneChange* …）
 mem.csv        进程内存/显存时间序列（t_s,procs,wset_mb,private_mb,gpu_*_mb）
@@ -72,6 +73,11 @@ stdout.log / stderr.log / argv.txt / meta.json   子进程现场
   / `procs`，来自 OS（工作集按**进程树**求和；`uv` 的 `python.exe` 只是启动器）。
 - `vram`：`baseline_mb` / `peak_mb` / `delta_mb` / `total_mb` / `samples`，来自 VS 脚本内的
   NVML 整卡采样。`delta_mb` 才是本次运行抬升的显存；绝对峰值包含别的进程。
+- `debug`（`Run.vpy(..., debug=True)` 时）：`samples` / `dups` / `scene_prev` / `scene_next`
+  / `min_diff` / `median_diff` / `max_diff`。逐帧明细是 `vs.log` 里的
+  `DEBUG {"frame","diff","scene_prev","scene_next","dup"}` 行（同一帧会被重复求值，
+  解析时按帧号去重；第 0 帧永远不算重复）。`dups` 可用于发现帧生成/去重链路的重复帧，
+  `scene_*` 来自上游检测器（如 `k7f.SCDetect2`）。
 
 判失败时先看 `mpv.log` 里的 `[f]`/`[e]` 行与 `vs.log`；两者都在用例目录里。
 
@@ -93,6 +99,9 @@ stdout.log / stderr.log / argv.txt / meta.json   子进程现场
 | `VFI_MEM_GPU` | `1` 时对**所有**子进程开 OS 每进程显存采样（默认只对 GPU 用例开；每条多花 ~1s） |
 | `VFI_VRAM` | `0` 关闭 VS 脚本内的整卡显存采样（默认开） |
 | `VFI_VRAM_INTERVAL` | 整卡显存采样间隔秒数（默认 `0.25`） |
+| `VFI_DEBUG` | `0` 关闭 vpy 里的逐帧 `DEBUG` 采样（默认开） |
+| `VFI_DEBUG_DUP_TOL` | 判定重复帧的帧间平均绝对差阈值（默认 `1e-6`） |
+| `VFI_K7` | k7sfunc 源码目录（默认 `<repo>\k7sfunc\src`，其次 playkit stage 的 `Lib\site-packages`） |
 
 套件不写死绝对路径：所有外部依赖都走上面这张表 + 相对仓库根的推导，所以
 mpv-playkit 侧（`..\mpv-playkit`）可以用 `VFI_PLAYKIT=<stage>` 复用它验证打包产物。
@@ -104,7 +113,7 @@ lib/paths.py     外部依赖定位（全部带 env 覆盖）
 lib/runner.py    子进程封装（超时/退出码/日志落盘/可选 procdump/内存采样）
 lib/memory.py    进程树内存（psapi）与每进程显存（性能计数器）采样
 lib/mpv.py       mpv 命令行 + 日志解析（converted / fps / fatal / 落盘帧）
-lib/vpy.py       生成 vpy（日志钩子 + 逐帧属性 dump + NVML 显存采样）与 vspipe 调用
+lib/vpy.py       生成 vpy（日志钩子 + 逐帧属性/差异 dump + NVML 显存采样）与 vspipe 调用
 lib/frames.py   PNG 序列 → numpy（借 ffmpeg 解码，支持 8/16bit）
 lib/metrics.py  亮度/通道均值/重复帧/黑帧/闪烁指标
 lib/case.py     一条用例的目录与运行句柄（Case / Run）
@@ -115,5 +124,5 @@ cases/          用例，文件名前缀是层级顺序
 ## 已知的 mpv / VS 行为（写用例前先读）
 
 见 `..\AGENT.md` 的「mpv + VapourSynth 实测坑」一节——那里记的是必须绕开的坑
-（脚本画面必须从 `video_in` 派生、`ModifyFrame` 在 mpv 下必崩、输出帧数不能短于输入、
+（脚本画面必须从 `video_in` 派生、`clips[]` 函数不能绑定+位置参数调用、输出帧数不能短于输入、
 VS 帧属性里的 `_Matrix` 不参与 mpv 的 VO 转换等）。
