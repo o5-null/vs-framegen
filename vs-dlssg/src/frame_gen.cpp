@@ -909,6 +909,18 @@ void VS_CC frameGenCreate(const VSMap* in, VSMap* out, void* userData, VSCore* c
 }  // namespace
 
 VS_EXTERNAL_API(void) VapourSynthPluginInit2(VSPlugin* plugin, const VSPLUGINAPI* vspapi) {
+  // Keep this DLL loaded for the life of the process. mpv seeks by destroying the VapourSynth core
+  // (vf_vapoursynth_reset -> destroy_vs -> freeScript), and VSScript then FreeLibrary()s every plugin
+  // the script loaded, which takes the static session in here with it. Pinning the module makes that
+  // FreeLibrary() only drop a reference, so the engine session survives a frame-back-step and the
+  // next filter can reuse it instead of starting the engine cold (see keepSessionAcrossFilters).
+  HMODULE self = nullptr;
+  GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
+                     reinterpret_cast<LPCWSTR>(&VapourSynthPluginInit2), &self);
+  if (std::getenv("VSFG_KEEP_DEBUG")) {
+    std::fprintf(stderr, "[fg] plugin init, pin %s (module %p)\n", self ? "ok" : "FAILED", self);
+  }
+
   // Built against the newest API the headers offer, but the core that loads us may be older, and
   // configPlugin refuses an apiVersion it does not have. Declare the lower of the two so the same
   // binary registers on 4.0 and on 4.1/4.2; anything 4.1+ only is checked at its call site.

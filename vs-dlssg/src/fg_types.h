@@ -9,6 +9,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <string>
 
 namespace fg {
@@ -156,5 +157,21 @@ struct Config {
   // ~1.7x faster than low yet half a dB better, so low is only worth it when VRAM is the limit.
   int quality = 1;
 };
+
+// Whether an engine session outlives the filter that created it.
+//
+// mpv destroys every VapourSynth filter, frees its core and unloads its plugin DLLs on each seek
+// (vf_vapoursynth_reset -> destroy_vs -> freeScript), and a frame-back-step is a seek. Dropping the
+// session there meant a cold engine start (CUDA/D3D12/context, NGX or nvVFX load) for every step.
+// The plugins now pin their own module in the process (VapourSynthPluginInit2), so a session can be
+// kept and handed to the next filter that asks for the same shape; VSFG_KEEP=0 restores the old
+// drop-on-release behaviour, for A/B runs.
+inline bool keepSessionAcrossFilters() {
+  static const bool keep = [] {
+    const char* value = std::getenv("VSFG_KEEP");
+    return !(value && *value && *value == '0');
+  }();
+  return keep;
+}
 
 }  // namespace fg

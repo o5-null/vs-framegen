@@ -1641,14 +1641,6 @@ NgxSession* NgxSession::acquire(const Config& config, std::string& error) {
   if (g_session) {
     const uint32_t mvW = config.motionWidth ? config.motionWidth : config.width;
     const uint32_t mvH = config.motionHeight ? config.motionHeight : config.height;
-    if (g_session->impl_->width != config.width || g_session->impl_->height != config.height ||
-        g_session->impl_->motionWidth != mvW || g_session->impl_->motionHeight != mvH ||
-        g_session->impl_->engine != config.engine ||
-        !g_session->impl_->format.sameLayout(config.format)) {
-      error = "vdlssg: only one frame size, pixel layout and engine per process is supported "
-              "(restart with a single size)";
-      return nullptr;
-    }
     // The proxy pinned one preset when this process loaded it; another value would need a restart.
     if (config.preset != 0 && g_session->impl_->preset != config.preset) {
       error = std::string("vdlssg: the DLSS-G preset is fixed for the process (pinned ") +
@@ -1656,8 +1648,27 @@ NgxSession* NgxSession::acquire(const Config& config, std::string& error) {
               presetName(config.preset) + "; restart with a single preset";
       return nullptr;
     }
-    ++g_refCount;
-    return g_session;
+    if (g_session->impl_->width == config.width && g_session->impl_->height == config.height &&
+        g_session->impl_->motionWidth == mvW && g_session->impl_->motionHeight == mvH &&
+        g_session->impl_->engine == config.engine &&
+        g_session->impl_->format.sameLayout(config.format)) {
+      // Per-call knobs are not part of the shape: take the new filter's values so a kept session
+      // follows the script it is now serving (they are read on every generate, under this lock).
+      g_session->impl_->camera = config.camera;
+      g_session->impl_->motion = config.motion;
+      ++g_refCount;
+      return g_session;
+    }
+    if (g_refCount > 0) {
+      error = "vdlssg: only one frame size, pixel layout and engine per process is supported "
+              "(restart with a single size)";
+      return nullptr;
+    }
+    // An idle session from an earlier filter (mpv keeps it across a seek) and this filter asks for a
+    // different shape: rebuild it, which is what the process did on every seek before the session
+    // was kept.
+    delete g_session;
+    g_session = nullptr;
   }
   std::unique_ptr<NgxSession> session(new NgxSession());
   if (!session->impl_->init(config, error)) return nullptr;
@@ -1671,8 +1682,13 @@ void NgxSession::release(NgxSession* session) {
   std::lock_guard<std::mutex> guard(g_lock);
   if (session != g_session) return;
   if (--g_refCount > 0) return;
-  g_session = nullptr;
-  delete session;
+  // Kept for the next filter instead of destroyed: the plugin module stays loaded (it pins itself in
+  // VapourSynthPluginInit2) and mpv re-creates the filter on every seek, so the engine start this
+  // session paid for is reused by a frame-back-step instead of being thrown away.
+  if (!fg::keepSessionAcrossFilters()) {
+    g_session = nullptr;
+    delete session;
+  }
 }
 
 uint64_t NgxSession::newStream() {

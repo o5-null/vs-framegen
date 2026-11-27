@@ -1023,14 +1023,31 @@ int g_refs = 0;
 
 VfgSession* VfgSession::acquire(const Config& config, std::string& error) {
   std::lock_guard<std::mutex> guard(g_sessionLock);
+  const bool debug = std::getenv("VSFG_KEEP_DEBUG") != nullptr;
   if (g_session) {
-    if (g_session->impl_->config.width != config.width || g_session->impl_->config.height != config.height) {
-      error = "vvfg: only one frame size per process is supported (restart with a single size)";
+    const bool same = g_session->impl_->config.width == config.width &&
+                      g_session->impl_->config.height == config.height &&
+                      g_session->impl_->config.quality == config.quality &&
+                      g_session->impl_->config.proxyDir == config.proxyDir &&
+                      g_session->impl_->config.adapterIndex == config.adapterIndex &&
+                      g_session->impl_->config.format.sameLayout(config.format);
+    if (!same && g_refs > 0) {
+      error = "vvfg: only one frame size, pixel layout and model tier per process is supported "
+              "(restart with a single size)";
       return nullptr;
     }
-    g_refs++;
-    return g_session;
+    if (same) {
+      g_refs++;
+      if (debug) std::fprintf(stderr, "[vvfg] session reused (refs %d)\n", g_refs);
+      return g_session;
+    }
+    // An idle session from an earlier filter (mpv keeps it across a seek) and this filter asks for a
+    // different shape: rebuild, which is what the process did on every seek before it was kept.
+    if (debug) std::fprintf(stderr, "[vvfg] session shape changed, rebuilding\n");
+    delete g_session;
+    g_session = nullptr;
   }
+  if (debug) std::fprintf(stderr, "[vvfg] session created from cold\n");
   auto impl = std::make_unique<Impl>();
   impl->config = config;
   impl->verbose = config.log;
@@ -1069,18 +1086,39 @@ VfgSession* VfgSession::acquire(const Config& config, std::string& error) {
 
 void VfgSession::release(VfgSession* session) {
   std::lock_guard<std::mutex> guard(g_sessionLock);
-  if (!session)
+  if (!session || session != g_session)
     return;
   if (--g_refs > 0)
     return;
-  g_session = nullptr;
-  delete session;
+  // Kept for the next filter instead of destroyed: the plugin pins its module in the process
+  // (VapourSynthPluginInit2) and mpv re-creates the filter on every seek, so the CUDA contexts, the
+  // effect and the model each lane loaded are reused by a frame-back-step instead of paid again.
+  // The lane state stays consistent: the model interpolates a pair only when its SrcImage0 is the
+  // frame it last took as SrcImage1, so a jump to a new position is passed through for one pair
+  // exactly as a fresh context would be.
+  if (!fg::keepSessionAcrossFilters()) {
+    g_session = nullptr;
+    delete session;
+  }
 }
 
 VfgSession::VfgSession() = default;
 VfgSession::~VfgSession() = default;
 
-uint64_t VfgSession::newStream() { return impl_->nextStream++; }
+uint64_t VfgSession::newStream() {
+  std::lock_guard<std::mutex> guard(impl_->lock);
+  // A new stream (a filter that was just created, which is every mpv seek) restarts the frame
+  // numbers this filter hands in. The shared surfaces and the packed host frames are cached by that
+  // number, so the caches of the previous stream must not be matched by a frame of this one: frame 0
+  // of the new stream would otherwise return the bytes of an earlier stream's frame 0.
+  impl_->sharedIndex[0] = impl_->sharedIndex[1] = -1;
+  impl_->packedIndex[0] = impl_->packedIndex[1] = -1;
+  impl_->sharedNext = 0;
+  impl_->packedNext = 0;
+  impl_->batchPair = -1;
+  impl_->batchA = impl_->batchB = -1;
+  return impl_->nextStream++;
+}
 uint32_t VfgSession::width() const { return impl_->config.width; }
 uint32_t VfgSession::height() const { return impl_->config.height; }
 

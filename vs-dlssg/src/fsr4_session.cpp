@@ -228,13 +228,26 @@ uint64_t Fsr4Session::newStream() {
 Fsr4Session* Fsr4Session::acquire(const fg::Config& config, std::string& error) {
   std::lock_guard<std::mutex> guard(g_sessionLock);
   if (g_session) {
-    // One bridge instance, one frame size: a second size would need a second process.
-    if (g_session->width() != config.width || g_session->height() != config.height) {
+    // One bridge instance, one frame size and engine pack: the bridge is created for a fixed size
+    // and loads FSR from one directory.
+    if (g_session->width() == config.width && g_session->height() == config.height &&
+        g_session->impl_->config.proxyDir == config.proxyDir &&
+        g_session->impl_->config.adapterIndex == config.adapterIndex) {
+      // Camera handling and the transfer depth are read per feed call, so they can follow the new
+      // filter without rebuilding the bridge.
+      g_session->impl_->config.camera = config.camera;
+      g_session->impl_->config.force8Bit = config.force8Bit;
+      ++g_refs;
+      return g_session;
+    }
+    if (g_refs > 0) {
       error = "vfsr4: only one frame size per process is supported (restart with a single size)";
       return nullptr;
     }
-    ++g_refs;
-    return g_session;
+    // An idle session from an earlier filter (mpv keeps it across a seek) and this filter asks for a
+    // different shape: rebuild, which is what the process did on every seek before it was kept.
+    delete g_session;
+    g_session = nullptr;
   }
   std::unique_ptr<Fsr4Session> session(new Fsr4Session());
   if (!session->impl_->init(config, error)) return nullptr;
@@ -248,8 +261,14 @@ void Fsr4Session::release(Fsr4Session* session) {
   std::lock_guard<std::mutex> guard(g_sessionLock);
   if (session != g_session) return;
   if (--g_refs > 0) return;
-  g_session = nullptr;
-  delete session;
+  // Kept for the next filter instead of destroyed: the plugin pins its module in the process
+  // (VapourSynthPluginInit2) and mpv re-creates the filter on every seek, so the bridge, the Vulkan
+  // device and the FSR context are reused by a frame-back-step instead of paid again. The pair
+  // protocol starts over on the new stream id, which every frame request carries.
+  if (!fg::keepSessionAcrossFilters()) {
+    g_session = nullptr;
+    delete session;
+  }
 }
 
 bool Fsr4Session::generate(const fg::PlaneView& prev, const fg::PlaneView& cur,
