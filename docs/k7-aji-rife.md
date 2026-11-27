@@ -90,6 +90,13 @@ conf 换成带超分链的模板（`chain_1_model_1_name` = ONNX 文件名，不
 Performance 10.8 ms/帧；1080p Balanced 57.2 ms/帧），整帧模型仍需能建 engine 的 TensorRT。
 模型来源与打包方式见 vsaji 的 `README.md`「超分（Upscale）」。
 
+时序模型（`temporalfix_s1/s2/s3`）也走这个滤镜：conf 加 `chain_1_temporal_fix_model=<模型名>`，
+可选 `chain_1_temporal_fix_before_upscale=yes|no`（默认 no = 超分之后）与
+`chain_1_temporal_fix_scene_threshold`（默认 0.150）。插件按 `aji_temporal_radius()` 的 r
+滚动 `aji_ingest` 再 `aji_infer_seq`，seek/乱序时自动 reset。代价明显：720p HD_PERF 8.4 →
+30.2 ms/帧，1080p 38.9 → 189.1 ms/帧（RTX 3080）。只加 `chain_1_temporal_fix_model`、
+不给超分模型的纯时序链也支持（输出尺寸不变）。`Rife` 不接受这类 conf（它没有 `model_dir`）。
+
 ## 4. conf 模板（k7 自动生成）
 
 ```ini
@@ -127,7 +134,8 @@ chain_1_rife_model=<code>
 - 每帧一次主机↔设备拷贝：VS 帧在系统内存，拿不到解码器的 GPU 帧句柄；mpv 内置滤镜的零拷贝
   路径这里做不到。1080p 一次往返约 9 MB，相对推理可忽略。
 - 只支持 4:2:0 8/10bit；其他格式先转。
-- `Rife` 只吃 RIFE-only conf；带超分链的 conf 请改用同插件的 `Upscale`（k7 暂无封装）。
+- `Rife` 只吃 RIFE-only conf；带超分链或 `chain_1_temporal_fix_model` 的 conf 请改用同插件的
+  `Upscale`（k7 暂无封装）。`Rife` 没有 `model_dir`，链里其它模型找不到文件时整条链不激活。
 - `aji_trt.dll` 仍链接 nvinfer（CUDA 原生内核与 TensorRT 后端在**同一个** DLL 里），TensorRT
   运行时必须在 `trt\` 里（`aji-runtime.json` 指路，别手写 PATH）；缺 `nvinfer_11.dll` 时整个
   后端加载失败（error 126），即使 conf 只走原生内核。`Version()["missing"]` 会提前指出。
