@@ -75,7 +75,11 @@ struct FilterData {
   // Identifies this filter's frame stream for the shared session's pair cache, so a second clip in
   // the same process does not inherit the first one's "pair 0 already seeded" state.
   uint64_t streamId = 0;
-  double sceneThreshold = 0.15;
+  // Gradient-orientation distance above which a pair is a cut; 0 disables the built-in detector.
+  double sceneThreshold = 0.12;
+  // Block-max luma difference below which a pair is a duplicate and the source frame is copied;
+  // 0 disables the test.
+  double duplicateThreshold = 0.005;
   bool log = false;
   int numFrames = 0;
   // Output frames per source frame: 2 = one interpolated frame per pair, up to 6 = five. Every
@@ -95,18 +99,51 @@ struct FilterData {
   int camera = 0;
 };
 
-// Average absolute luma difference on a coarse grid. Cheap and good enough to catch a cut: the
-// runtime has no scene detection of its own, and a cut pair produces a badly torn frame.
+// What one source pair says about a cut, measured without comparing brightness levels.
 //
-// YUV reads luma only: the chroma planes are subsampled, so walking them on the luma grid steps past
-// their last row (an access violation, not just a wrong number), and a cut shows in brightness
-// first anyway. RGBS is planar float and every plane is full size, so all three are averaged there.
-// Both branches work on luma in [0,1] so one threshold means the same thing for either input.
-bool isSceneCut(const VSAPI* vsapi, const VSFrame* a, const VSFrame* b, int width, int height,
-                const ColorFormat& format, double threshold) {
-  constexpr int step = 8;
-  double sum = 0.0;
-  long long count = 0;
+// A brightness difference cannot tell a cut from a flash, a light switch, a speed-line effect or a
+// fast pan: all of them change the levels while the picture stays the same shot, and a threshold
+// that catches cuts then has to hold on every effect too. Gradient *direction*, however, is
+// invariant to gain and offset, so what survives is the structure: a cut replaces the orientation
+// histogram, and everything else leaves it alone.
+//
+// hog is the L1/2 distance between the two 9-bin unsigned orientation histograms, each weighted by
+// gradient magnitude (0 = same directions, 2 = no bin in common). Measured on real material: true
+// cuts 0.17..0.39, specular flashes 0.03..0.07, motion/pans/speed-lines 0.00..0.05, duplicates 0.
+//
+// blockMax is the largest |luma difference| inside any 32x32-pixel block (luma in [0,1], so one
+// 10-bit limited-range code value is 1/876). Two frames under a couple of code values apart
+// everywhere are a duplicate pair: the runtime would only reproduce one of them, so the plugin
+// copies the source frame instead of paying for an evaluation.
+//
+// Sampling every `step` pixels keeps the cost at ~1 ms for 1080p and ~4 ms for 4K. YUV reads luma
+// only: the chroma planes are subsampled, so walking them on the luma grid steps past their last
+// row, and a cut shows in brightness structure anyway. RGBS is planar float, so all three planes
+// are read and weighted into luma.
+struct SceneMeasure {
+  double hog = 0.0;
+  double blockMax = 0.0;
+};
+
+SceneMeasure measureScene(const VSAPI* vsapi, const VSFrame* a, const VSFrame* b, int width,
+                          int height, const ColorFormat& format) {
+  constexpr int step = 4;      // luma sample grid, in pixels
+  constexpr int block = 8;     // samples per side of a duplicate-detection block (32 px)
+  constexpr int bins = 9;      // orientation bins over 0..pi
+  constexpr double minMag = 0.02;      // gradient magnitude gate, luma units
+  constexpr double minCoverage = 0.05;  // share of samples that must clear minMag
+  constexpr double kPi = 3.14159265358979323846;
+
+  SceneMeasure measure;
+  const int cols = (width + step - 1) / step;
+  const int rows = (height + step - 1) / step;
+  if (cols < 3 || rows < 3) return measure;
+
+  // Both frames' sampled luma, side by side: one allocation per pair.
+  const std::size_t count = std::size_t(cols) * std::size_t(rows);
+  std::vector<float> lum(count * 2);
+  float* la = lum.data();
+  float* lb = la + count;
   if (format.isYuv()) {
     const YuvQuant quant = yuvQuant(format.bits, format.fullRange);
     const int bytes = format.bytesPerSample();
@@ -114,32 +151,110 @@ bool isSceneCut(const VSAPI* vsapi, const VSFrame* a, const VSFrame* b, int widt
     const uint8_t* pb = vsapi->getReadPtr(b, 0);
     const std::ptrdiff_t sa = vsapi->getStride(a, 0);
     const std::ptrdiff_t sb = vsapi->getStride(b, 0);
-    for (int y = 0; y < height; y += step) {
-      for (int x = 0; x < width; x += step) {
-        const double ya = quant.luma(yuvReadSample(pa, sa, x, y, bytes));
-        const double yb = quant.luma(yuvReadSample(pb, sb, x, y, bytes));
-        sum += std::fabs(ya - yb);
-        ++count;
+    for (int y = 0; y < rows; ++y) {
+      const int sy = (std::min)(y * step, height - 1);
+      for (int x = 0; x < cols; ++x) {
+        const int sx = (std::min)(x * step, width - 1);
+        la[std::size_t(y) * cols + x] = quant.luma(yuvReadSample(pa, sa, sx, sy, bytes));
+        lb[std::size_t(y) * cols + x] = quant.luma(yuvReadSample(pb, sb, sx, sy, bytes));
       }
     }
   } else {
+    constexpr float weight[3] = {0.2126f, 0.7152f, 0.0722f};
+    const float* pa[3];
+    const float* pb[3];
+    ptrdiff_t sa[3];
+    ptrdiff_t sb[3];
     for (int plane = 0; plane < 3; ++plane) {
-      const float* pa = reinterpret_cast<const float*>(vsapi->getReadPtr(a, plane));
-      const float* pb = reinterpret_cast<const float*>(vsapi->getReadPtr(b, plane));
-      const ptrdiff_t sa = vsapi->getStride(a, plane) / sizeof(float);
-      const ptrdiff_t sb = vsapi->getStride(b, plane) / sizeof(float);
-      for (int y = 0; y < height; y += step) {
-        const float* ra = pa + y * sa;
-        const float* rb = pb + y * sb;
-        for (int x = 0; x < width; x += step) {
-          sum += std::fabs(double(ra[x]) - double(rb[x]));
-          ++count;
+      pa[plane] = reinterpret_cast<const float*>(vsapi->getReadPtr(a, plane));
+      pb[plane] = reinterpret_cast<const float*>(vsapi->getReadPtr(b, plane));
+      sa[plane] = vsapi->getStride(a, plane) / sizeof(float);
+      sb[plane] = vsapi->getStride(b, plane) / sizeof(float);
+    }
+    for (int y = 0; y < rows; ++y) {
+      const int sy = (std::min)(y * step, height - 1);
+      for (int x = 0; x < cols; ++x) {
+        const int sx = (std::min)(x * step, width - 1);
+        float va = 0.0f;
+        float vb = 0.0f;
+        for (int plane = 0; plane < 3; ++plane) {
+          va += weight[plane] * pa[plane][std::ptrdiff_t(sy) * sa[plane] + sx];
+          vb += weight[plane] * pb[plane][std::ptrdiff_t(sy) * sb[plane] + sx];
         }
+        la[std::size_t(y) * cols + x] = va;
+        lb[std::size_t(y) * cols + x] = vb;
       }
     }
   }
-  if (count == 0) return false;
-  return (sum / double(count)) > threshold;
+
+  // Duplicate test first: it is a plain max over blocks, and a repeated frame is also the case
+  // where the runtime has nothing to invent.
+  for (int by = 0; by < rows; by += block) {
+    const int yEnd = (std::min)(by + block, rows);
+    for (int bx = 0; bx < cols; bx += block) {
+      const int xEnd = (std::min)(bx + block, cols);
+      double m = 0.0;
+      for (int y = by; y < yEnd; ++y) {
+        const std::size_t base = std::size_t(y) * cols;
+        for (int x = bx; x < xEnd; ++x) {
+          const double d = std::fabs(double(la[base + x]) - double(lb[base + x]));
+          if (d > m) m = d;
+        }
+      }
+      if (m > measure.blockMax) measure.blockMax = m;
+    }
+  }
+
+  // Orientation histograms over forward differences between neighbouring samples, so the sampling
+  // grid doubles as the gradient spacing.
+  double histA[bins] = {};
+  double histB[bins] = {};
+  int coveredA = 0;
+  int coveredB = 0;
+  const int sampleCount = (cols - 1) * (rows - 1);
+  for (int y = 0; y + 1 < rows; ++y) {
+    const std::size_t row = std::size_t(y) * cols;
+    const std::size_t next = row + cols;
+    for (int x = 0; x + 1 < cols; ++x) {
+      for (int side = 0; side < 2; ++side) {
+        const float* l = side == 0 ? la : lb;
+        const double gx = double(l[row + x + 1]) - double(l[row + x]);
+        const double gy = double(l[next + x]) - double(l[row + x]);
+        const double mag = std::sqrt(gx * gx + gy * gy);
+        if (!(mag > minMag)) continue;
+        double ang = std::atan2(gy, gx);
+        if (ang < 0.0) ang += kPi;  // unsigned: 0..pi, so inverted contrast looks the same
+        int idx = int(ang * (double(bins) / kPi));
+        if (idx < 0) idx = 0;
+        if (idx >= bins) idx = bins - 1;
+        (side == 0 ? histA : histB)[idx] += mag;
+        (side == 0 ? coveredA : coveredB) += 1;
+      }
+    }
+  }
+  // A near-black or flat frame has no directions, only noise: its histogram must not be read as
+  // evidence either way. Fades therefore never cut; the runtime blends across them.
+  if (sampleCount <= 0 || coveredA < minCoverage * sampleCount ||
+      coveredB < minCoverage * sampleCount) {
+    measure.hog = 0.0;
+    return measure;
+  }
+  double totalA = 0.0;
+  double totalB = 0.0;
+  for (int i = 0; i < bins; ++i) {
+    totalA += histA[i];
+    totalB += histB[i];
+  }
+  if (totalA <= 1e-8 || totalB <= 1e-8) {
+    measure.hog = 0.0;
+    return measure;
+  }
+  double distance = 0.0;
+  for (int i = 0; i < bins; ++i) {
+    distance += std::fabs(histA[i] / totalA - histB[i] / totalB);
+  }
+  measure.hog = 0.5 * distance;
+  return measure;
 }
 
 // Reads an int from a frame's properties. false means the key is absent, which is different from
@@ -215,6 +330,9 @@ void markFrame(VSFrame* frame, const VSAPI* vsapi, int generated, int fallback, 
   vsapi->mapSetInt(props, "_DLSSGFallback", fallback, maReplace);
   vsapi->mapSetInt(props, "_DLSSGSceneCut", sceneCut, maReplace);
   vsapi->mapSetInt(props, "_DLSSGMultiFrameIndex", slot, maReplace);
+  // A duplicate pair is held for a reason of its own: the source frames match, so the engine would
+  // only reproduce one of them.
+  vsapi->mapSetInt(props, "_DLSSGDuplicate", fallback == 4 ? 1 : 0, maReplace);
 }
 
 const VSFrame* VS_CC getFrame(int n, int activationReason, void* instanceData, void** frameData,
@@ -307,10 +425,18 @@ const VSFrame* VS_CC getFrame(int n, int activationReason, void* instanceData, v
   const bool haveCutPrev = framePropInt(vsapi, b, "_SceneChangePrev", cutPrev);
   const bool haveFlags = haveCutNext || haveCutPrev;
   if (haveFlags) data->sceneMode.store(1);
+  const bool external = data->sceneMode.load() == 1;
+  const bool runBuiltin = !external && data->sceneThreshold > 0.0;
+  const bool checkDuplicate = data->duplicateThreshold > 0.0;
+  // One measurement serves both questions: the orientation distance for a cut, the block-max
+  // difference for a duplicate pair.
+  const SceneMeasure measure =
+      (runBuiltin || checkDuplicate) ? measureScene(vsapi, a, b, width, height, data->format)
+                                     : SceneMeasure{};
   bool sceneCut = false;
-  if (data->sceneMode.load() == 1) {
+  if (external) {
     sceneCut = (haveCutNext && cutNext != 0) || (haveCutPrev && cutPrev != 0);
-  } else {
+  } else if (runBuiltin) {
     // Nobody marked the clip so far: measure the pair ourselves and say so once, so a quality
     // problem can be traced to the detector instead of the runtime.
     if (data->sceneMode.exchange(2) == 0) {
@@ -319,9 +445,9 @@ const VSFrame* VS_CC getFrame(int n, int activationReason, void* instanceData, v
                                "falling back to the built-in scene detector (scene_threshold)",
                         core);
     }
-    sceneCut = data->sceneThreshold > 0.0 &&
-               isSceneCut(vsapi, a, b, width, height, data->format, data->sceneThreshold);
+    sceneCut = measure.hog >= data->sceneThreshold;
   }
+  const bool duplicate = checkDuplicate && measure.blockMax < data->duplicateThreshold;
 
   if (sceneCut) {
     // Between two unrelated shots the honest answer is the frame before the cut. Check this
@@ -335,6 +461,21 @@ const VSFrame* VS_CC getFrame(int n, int activationReason, void* instanceData, v
       return nullptr;
     }
     markFrame(held, vsapi, 1, 1, 1, slot);
+    return held;
+  }
+
+  if (duplicate) {
+    // Two frames a code value or two apart everywhere: an interpolated frame would be the same
+    // picture, so skip the runtime and copy. Cheap way to serve 24fps holds in 60/120fps output.
+    VSFrame* held = copyFrameWithProps(vsapi, a, a, core);
+    if (held) applyTimelineProps(vsapi, held, a, slot, mult, data->outFpsNum, data->outFpsDen);
+    vsapi->freeFrame(a);
+    vsapi->freeFrame(b);
+    if (!held) {
+      vsapi->setFilterError(FG_NS ": failed to allocate the duplicate frame", frameCtx);
+      return nullptr;
+    }
+    markFrame(held, vsapi, 1, 4, 0, slot);
     return held;
   }
 
@@ -399,9 +540,19 @@ const VSFrame* VS_CC getFrame(int n, int activationReason, void* instanceData, v
     int64_t value = 0;
     // mpv's vf_vapoursynth tags the matrix as _ColorSpace (libavcodec values, which are the same
     // H.273 numbers as _Matrix), so honour whichever the caller set.
-    if (framePropInt(vsapi, a, "_Matrix", value)) format.matrix = int(value);
+    const bool haveMatrix = framePropInt(vsapi, a, "_Matrix", value);
+    if (haveMatrix) format.matrix = int(value);
     else if (framePropInt(vsapi, a, "_ColorSpace", value)) format.matrix = int(value);
-    if (framePropInt(vsapi, a, "_Range", value)) format.fullRange = value == 1;
+    const bool haveRange = framePropInt(vsapi, a, "_Range", value);
+    if (haveRange) format.fullRange = value == 1;
+    // mpv writes no _Range at all, only _ColorRange, and that one is the mpv/libavcodec enum:
+    // 1 = limited, 0 = full, i.e. the opposite of _Range. Alias it only on that exact signature
+    // (no _Matrix beside it), so a filter that happens to use the VapourSynth meaning for the same
+    // key cannot silently flip the range.
+    else if (!haveMatrix) {
+      int64_t colorRange = 0;
+      if (framePropInt(vsapi, a, "_ColorRange", colorRange)) format.fullRange = colorRange == 0;
+    }
     if (framePropInt(vsapi, a, "_ChromaLocation", value)) format.chromaLocation = int(value);
   }
 
@@ -624,8 +775,14 @@ void VS_CC frameGenCreate(const VSMap* in, VSMap* out, void* userData, VSCore* c
   }
   err = 0;
   data->sceneThreshold = vsapi->mapGetFloat(in, "scene_threshold", 0, &err);
-  if (err) data->sceneThreshold = 0.15;
+  // Gradient-orientation distance, so 0.12 has nothing to do with the old differences-of-brightness
+  // scale: true cuts measure 0.17+, effects and motion under 0.07.
+  if (err) data->sceneThreshold = 0.12;
   err = 0;
+  data->duplicateThreshold = vsapi->mapGetFloat(in, "duplicate_threshold", 0, &err);
+  // Block-max luma difference in [0,1] luma units: two 10-bit code values. Real pairs bottom out
+  // around 0.027, near-duplicates are 0.001.
+  if (err) data->duplicateThreshold = 0.005;
   data->log = vsapi->mapGetInt(in, "log", 0, &err) != 0 && err == 0;
 
   Config config;
@@ -761,7 +918,8 @@ VS_EXTERNAL_API(void) VapourSynthPluginInit2(VSPlugin* plugin, const VSPLUGINAPI
                        0, plugin);
   vspapi->registerFunction("FrameGen",
                            "clip:vnode;multi:int:opt;mv:vnode:opt;proxy_dir:data:opt;gpu:int:opt;"
-                           "scene_threshold:float:opt;camera:int:opt;log:int:opt;force8bit:int:opt;preset:data:opt;"
+                           "scene_threshold:float:opt;duplicate_threshold:float:opt;camera:int:opt;"
+                           "log:int:opt;force8bit:int:opt;preset:data:opt;"
                            "mode:int:opt;",
                            "clip:vnode;", frameGenCreate, nullptr, plugin);
 }

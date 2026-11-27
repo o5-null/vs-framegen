@@ -15,7 +15,8 @@ import k7sfunc as k7f
 
 Multi = 2
 Mode = 1
-Scene = 0.25
+Scene = 0.12
+Dup = 0.005
 Gpu = None
 Pre_H = 0
 Log = False
@@ -23,21 +24,22 @@ Log = False
 ##   vfg 模型本身能连续内插，不需要"只填中点"；越界会被钳回 2..6
 ## 整数 0..2：模型档位，0 低 / 1 中（默认）/ 2 高。medium 已接近 high 的画质，
 ##   却快一倍多；high 留给静态画面/画质优先的场景。越界会被钳回 0..2
-## 浮点，切镜阈值（三平面 8 采样平均绝对差），0 关闭
-##   快节奏/粒子闪白素材建议 0.25，否则默认行为会把部分帧对 hold 成重复帧；更稳妥用 0.35
+## 浮点，切镜阈值（两帧梯度方向直方图距离，与亮度无关），0 关闭
+##   闪光/曝光跳变不会误判；快节奏素材可调到 0.15~0.2
+## 浮点，重复帧阈值（32px 块内亮度最大差），低于它就复制前一帧、跳过引擎；0 关闭
 ## 整数，DXGI 显卡序号，0 为排序一号；None 用 0（本引擎不经过 sm86 代理，没有"跟随代理"这回事）
 ## 整数，>0 时先把源预缩到这个高度再补帧
 ## <True|False> 每帧向 stderr 打一行 evaluate 耗时
 
 #### OSD 参数通道 ####
 # 前端脚本用 vf set 的 user-data 子参数传值，例如
-#   vf set @VVFG:vapoursynth="~~/vs/MEMC_VFG_NV.vpy":user-data="scene=0.35;gpu=0"
+#   vf set @VVFG:vapoursynth="~~/vs/MEMC_VFG_NV.vpy":user-data="scene=0.12;duplicate=0.005;gpu=0"
 # 优先级：字面量 < 环境变量（VVFG_*）< user_data；解析/插件定位/上行报告都在 k7f.FRAMEGEN_VPY 里
 
 out = k7f.FRAMEGEN_VPY(
 	video_in, __file__, engine="vvfg", fps_in=container_fps,
 	user_data=globals().get("user_data"),
-	multi=Multi, mode=Mode, scene=Scene, pre_h=Pre_H, gpu=Gpu, log=Log,
+	multi=Multi, mode=Mode, scene=Scene, duplicate=Dup, pre_h=Pre_H, gpu=Gpu, log=Log,
 )
 
 out.set_output()

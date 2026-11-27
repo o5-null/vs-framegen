@@ -20,7 +20,7 @@ core = vs.core
 src = core.ffms2.Source(r"input.mkv")            # 平面 YUV 直接给，插件自己转
 # 需要 RGB 流程时才转：src = core.resize.Bicubic(src, format=vs.RGBS, matrix_in_s="709")
 
-out = core.vdlssg.FrameGen(src, multi=2, scene_threshold=0.25,
+out = core.vdlssg.FrameGen(src, multi=2, scene_threshold=0.12,
                            proxy_dir=r"E:\code\dlssg-vfi\vs-dlssg\bin\dlss45")
 out.set_output()
 ```

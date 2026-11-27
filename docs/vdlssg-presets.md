@@ -114,7 +114,7 @@ if (opt.menuDetect) {
 - `MenuDetectionEnabled` 需要真正的菜单/静态叠加层特征才触发，Sintel 素材没有，
   所以"无变化"符合预期——但这不构成"有效"的证据，只是"在视频场景没有触发条件"。
   视频里等价的需求是**切镜检测**，而实测运行库本身不做（`--cut` 下 `suppressed=0`），
-  所以这件事仍由插件自己做（8 像素采样 luma 平均绝对差 > `scene_threshold`）。
+  所以这件事仍由插件自己做（两帧梯度方向直方图距离 > `scene_threshold`）。
 
 ## 4. 对视频插帧的实际可调项
 
@@ -123,7 +123,8 @@ if (opt.menuDetect) {
 | 插件参数 | 作用 |
 |---|---|
 | `multi` = 2 / 3 / 4 | 每对源帧生成 1 / 2 / 3 张中间帧（走 `MultiFrameCount`/`MultiFrameIndex`） |
-| `scene_threshold` = 0.15（缺省） | 切镜判定灵敏度，超过即吐源帧（`_DLSSGFallback=1`） |
+| `scene_threshold` = 0.12（缺省） | 切镜判定灵敏度：两帧梯度方向直方图（HOG）的 L1/2 距离，超过即吐源帧（`_DLSSGFallback=1`）。与亮度无关，闪光不误判 |
+| `duplicate_threshold` = 0.005（缺省） | 重复帧判定：按 32px 块比较，块内亮度最大差低于它就复制前一帧（`_DLSSGFallback=4`）。0 关闭 |
 | `gpu` | 选哪张显卡；不写时跟随 sm86 代理选中的那张（多显卡机器别再写死 0） |
 | `preset` = `a` / `c`（缺省沿用引擎包） | DLSS 4.5 引擎包的模型预设，见 §6 |
 

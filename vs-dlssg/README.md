@@ -63,7 +63,8 @@ src = core.ffms2.Source(r"input.mkv")          # 420P10 等平面 YUV 直接喂
 out = core.vdlssg.FrameGen(
     src,                     # RGBS 也接受（float32 RGB）
     multi=6,                 # 2..6，输出 multi 倍帧数、multi 倍帧率
-    scene_threshold=0.25,    # 仅当上游没有 _SceneChange* 属性时才用；0 关闭内置检测
+    scene_threshold=0.12,    # 仅当上游没有 _SceneChange* 属性时才用；0 关闭内置检测
+    duplicate_threshold=0.005,  # 块内最大差低于它就判重复帧，直接复制；0 关闭
     proxy_dir=r"E:\...\vs-dlssg\bin\dlss45",   # 可省略：默认 <DLL 目录>\dlss45
 )
 out.set_output()
@@ -74,21 +75,22 @@ YUV 的颜色编码不做成参数，而是每对从源帧属性里取（mpv 的
 | 属性 | 缺省 | 说明 |
 |---|---|---|
 | `_Matrix` / `_ColorSpace` | 1（BT.709） | 先读 `_Matrix`，没有再读 `_ColorSpace`（mpv 只写后者，两者数值同为 H.273 编码） |
-| `_Range` | 0（limited） | 1 = full |
+| `_Range` | 0（limited） | 1 = full。没有 `_Range` 且也没有 `_Matrix` 时（即 mpv 送进来的帧）改读 `_ColorRange`：那是 mpv/libavcodec 的枚举，1 = limited、0 = full，与 `_Range` 相反 |
 | `_ChromaLocation` | 0（left） | 0 left / 1 center / 2 top-left / 3 top；色度用双线性取样 |
 
 | 参数 | 缺省 | 说明 |
 |---|---|---|
 | `multi` | 2 | 2..6；每对相邻帧插 `multi-1` 张，帧率正好乘 `multi` |
 | `mv` | 无 | 可选光流剪辑（RGB，2 或 3 平面，全尺寸或半尺寸）。**实测这颗运行库基本不使用 mvec**（±30 px 常数场只让输出变化 1.5e-4），可以不给 |
-| `scene_threshold` | 0.15 | **只在源帧完全没有 `_SceneChangePrev`/`_SceneChangeNext` 时才用**（会 warning 一次）：相邻帧按 8 像素步长采样的平均绝对亮度差超过它就判切镜、该对直接 hold（RGBS 平均三个通道，YUV 只看亮度平面并按 `_Range` 归一化，两边同为 [0,1] 亮度，阈值含义一致）。快节奏素材建议 0.25–0.35：实测该片 10 s 内 0.15 会 hold 掉 11% 的帧对。上游带切镜属性时（K7sfunc `SCENE_DETECT`、`std.SCDetect`）本参数完全不起作用 |
+| `scene_threshold` | 0.12 | **只在源帧完全没有 `_SceneChangePrev`/`_SceneChangeNext` 时才用**（会 warning 一次）：用梯度方向直方图（HOG）判切镜，不用亮度。按 4 像素步长采样两帧亮度，求 9 个 bin 的无符号方向直方图（幅值加权），`hog = 0.5 * Σ|histA - histB|`，超过阈值就判切镜、该对直接 hold。HOG 只看结构方向，整帧变亮、闪光、曝光渐变都不改变方向分布（实测爆闪 0.035–0.069、摇镜/速度线 0.000–0.050，真切镜 0.17 以上），所以不再需要"减均值"。有效梯度像素（Sobel 幅值 >0.02）占比不足 5% 的帧（黑场、纯色、大面积渐隐）直接判非切镜，把渐隐过渡交给混合。快节奏素材可以调高；上游带切镜属性时（K7sfunc `SCENE_DETECT`、`std.SCDetect`）本参数完全不起作用 |
+| `duplicate_threshold` | 0.005 | 重复帧判定：把两帧按 32×32 像素分块（块间不重叠，步长 4 采样），任一块内亮度最大绝对差都小于它就判"重复帧"——直接复制前一帧、不走引擎（省 GPU）。luma 归一化到 [0,1]，10bit limited 下 1 个码值 = 1/876，所以 0.005 ≈ 4.4 个码值。实测真重复 0、±1 码值的近重复 0.0011、最静的正常运动边界 0.027 以上，分离 20 倍以上。0 关闭 |
 | `proxy_dir` | `<DLL 目录>\dlss45` | 引擎包目录，必须含 `version.dll` 与 `dlssg_sm86\` |
 | `preset` | 无（沿用引擎包；出厂为 A） | **仅 vdlssg**：`a` = 历史模型，`c` = FG Lite。装载代理前改写 `<proxy_dir>\dlssg_sm86.ini` 的 `[DLSSG] Preset`，进程内固定（同一进程换值会报错，换预设要另起进程）。静态画面与 `a` 逐像素相同；运动段 PSNR 45.6–48.0 dB，1080p 每生成帧 p50 GPU 时间 −13%、整体 wall −4.5%。`b` 直接报错：它要 HUD-less 画面 + UI 颜色/遮罩，本插件给不出，运行库也只会按 `a` 跑 |
 | `gpu` | 无（自动） | DXGI 适配器序号。不写时跟随 sm86 代理：载入代理后读它 install 记录里的 `selected_luid`，选同一张卡；没有记录就取接显示器的 NVIDIA 卡。多显卡机器上旧的 `gpu=0` 可能正是代理没覆写的那张，会报 `0xbad00002` |
 | `camera` | 0 | 相机类型（0 默认 / 1 第一人称 / 2 第三人称 / 3 工具） |
 | `log` | 0 | 每帧向 stderr 打一行毫秒数 |
 
-输出帧属性：`_DLSSGGenerated`（1 = 生成帧）、`_DLSSGFallback`（0 正常 / 1 切镜 hold / 2 抑制 hold / 3 末帧 hold）、`_DLSSGSceneCut`、`_DLSSGMultiFrameIndex`。帧率按 `multi` 乘好（`fpsNum` 已约分），每帧另写 `_DurationNum/_DurationDen`，插入帧按一个输出帧间隔推 `_AbsoluteTime`；源的 `_SceneChangePrev/_SceneChangeNext` 会搬到输出时间轴上（组首 / 组尾），所以下游按帧计时或按属性判切都正确。
+输出帧属性：`_DLSSGGenerated`（1 = 生成帧）、`_DLSSGFallback`（0 正常 / 1 切镜 hold / 2 抑制 hold / 3 末帧 hold / 4 重复帧拷贝）、`_DLSSGSceneCut`、`_DLSSGDuplicate`（1 = 该对是重复帧）、`_DLSSGMultiFrameIndex`。帧率按 `multi` 乘好（`fpsNum` 已约分），每帧另写 `_DurationNum/_DurationDen`，插入帧按一个输出帧间隔推 `_AbsoluteTime`；源的 `_SceneChangePrev/_SceneChangeNext` 会搬到输出时间轴上（组首 / 组尾），所以下游按帧计时或按属性判切都正确。
 
 其它引擎只是换命名空间与 `multi` 上限（参数完全相同）：
 

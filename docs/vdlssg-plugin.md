@@ -1,9 +1,10 @@
 # vdlssg — DLSS-G 帧生成 VapourSynth 插件
 
-`core.vdlssg.FrameGen(clip, multi=2, proxy_dir, gpu, scene_threshold=0.15, log=0)`
-输入 RGBS，输出 N→multi·N（`multi` = 2..6，即每对源帧插 `multi-1` 帧；6× 见
+`core.vdlssg.FrameGen(clip, multi=2, proxy_dir, gpu, scene_threshold=0.12, duplicate_threshold=0.005, log=0)`
+输入：平面 YUV 8..16bit 或 RGBS；输出 N→multi·N（`multi` = 2..6，即每对源帧插 `multi-1` 帧；6× 见
 `docs\vdlssg45-engine.md`）。
-每组 `multi` 帧里槽 0 原样返回源帧，槽 1..multi-1 由 DLSS-G 合成；末组不足时 hold，切镜吐源帧。
+每组 `multi` 帧里槽 0 原样返回源帧，槽 1..multi-1 由 DLSS-G 合成；末组不足时 hold，切镜吐源帧，
+重复帧整组复制。
 属性：`_DLSSGGenerated` / `_DLSSGFallback`(0 正常 / 1 切镜 / 2 运行库抑制 / 3 末帧 hold) /
 `_DLSSGSceneCut` / `_DLSSGMultiFrameIndex`(0..multi-1)。
 

@@ -116,10 +116,10 @@ VFG 固定 2×、FSR4 固定 2× 所以只认 `scene/pre_h/gpu/log`（FSR4 另�
 
 | 操作 | 观察到的 vpy 输出 |
 |---|---|
-| 启动 `user-data="multi=3;scene=0.25"` | `multi=3 scene=0.25 ud='multi=3;scene=0.25'` |
+| 启动 `user-data="multi=3;scene=0.12"` | `multi=3 scene=0.12 ud='multi=3;scene=0.12'` |
 | 状态文件里是 4×，命令行给的是 3× | 启动后自愈重建为 `multi=4`（观察者发现 ud 与状态不符） |
-| `set multi 5` | `multi=5 scene=0.25 ud='multi=5;preset=a;scene=0.25;pre_h=0;log=0'` |
-| `set preset c` | `preset=c ud='multi=5;preset=c;scene=0.25;pre_h=0;log=0'`；插件日志 `preset_pinned … preset_id:3, lite_effective:1` |
-| `set scene 0.35` | `multi=5 scene=0.35 …` |
-| 模拟点预设（挂一个无标签、无 user-data 的滤镜） | 先 `multi=3 ud=''`（插件默认），随即被认领重建为 `multi=5 scene=0.35` |
+| `set multi 5` | `multi=5 scene=0.12 ud='multi=5;preset=a;scene=0.12;duplicate=0.005;pre_h=0;log=0'` |
+| `set preset c` | `preset=c ud='multi=5;preset=c;scene=0.12;duplicate=0.005;pre_h=0;log=0'`；插件日志 `preset_pinned … preset_id:3, lite_effective:1` |
+| `set scene 0.15` | `multi=5 scene=0.15 …` |
+| 模拟点预设（挂一个无标签、无 user-data 的滤镜） | 先 `multi=3 ud=''`（插件默认），随即被认领重建为 `multi=5 scene=0.15` |
 | 真引擎（mpv-lazy 配置 + vdlssg.dll） | `[vdlssg] frame 1/3/5… slot …` 按 2× 出帧；`set multi 4` 后按 4× 出帧（207/210/211/213…），seek 之后仍是 4× |

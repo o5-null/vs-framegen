@@ -17,7 +17,7 @@
 | | `vsdlssg`（参考） | `vs-dlssg`（本仓） |
 |---|---|---|
 | 插件 id / 函数 | `com.vapourkit.dlssg` / `Interpolate`（`fg\plugin.cpp:188-190`） | `com.vapoursynth.<vdlssg\|vxessfg\|vvfg\|vfsr4>` / `FrameGen`（`frame_gen.cpp:465-471`） |
-| 参数 | `clip, depth, motion:opt, runtime_dir, depth_inverted:opt, auto_motion:opt, scene_threshold:opt` | `clip, multi:opt, mv:opt, proxy_dir:opt, gpu:opt, scene_threshold:opt, camera:opt, log:opt` |
+| 参数 | `clip, depth, motion:opt, runtime_dir, depth_inverted:opt, auto_motion:opt, scene_threshold:opt` | `clip, multi:opt, mv:opt, proxy_dir:opt, gpu:opt, scene_threshold:opt, duplicate_threshold:opt, camera:opt, log:opt` |
 | 深度 | **原生 API 必需**（`GRAYS`，`fg\plugin.cpp:139-145`），只能由 `dlssg.py` 自动生成 | **没有入口**，内部常量 0.5f 填满整张 R32F 纹理（`ngx_session.cpp:662-684`） |
 | 运动 | 可选 clip；缺省走内置 D3D12 Video 估计器（`auto_motion=1`） | 可选 `mv` clip；缺省零矢量常量纹理，**不做自动估计** |
 | 分辨率/帧率 | 三个 clip 必须同尺寸/同帧数/同 CFR（`fg\plugin.cpp:143-145`） | 只有 `mv` 需匹配（`frame_gen.cpp:386-396`） |
@@ -68,11 +68,11 @@
 
 | | 参考 | 本仓 |
 |---|---|---|
-| 判据 | 64×36 网格采样（每格取中心像素）的 \|Δ\| 均值 **且** 每通道 16 bin 直方图距离，两者都 ≥ 阈值（`scene_detection.h:24-26,57`） | 每 8 像素采样、三平面全算，仅 `mean\|Δ\| > threshold`（`frame_gen.cpp:70-91`） |
-| 默认值 | 0.15（`fg\plugin.cpp:22`） | 0.15（`frame_gen.cpp:411`） |
+| 判据 | 64×36 网格采样（每格取中心像素）的 \|Δ\| 均值 **且** 每通道 16 bin 直方图距离，两者都 ≥ 阈值（`scene_detection.h:24-26,57`） | 两帧亮度梯度方向直方图（9 bin 无符号，4 像素采样）的 L1/2 距离 `hog ≥ threshold`，与亮度无关；有效梯度覆盖不足 5% 的帧（黑场/渐隐）判非切镜 |
+| 默认值 | 0.15（`fg\plugin.cpp:22`） | 0.12（`frame_gen.cpp`）；另有 `duplicate_threshold=0.005` 判重复帧 |
 | 显式标志 | 优先看 `_SceneChangeNext/_SceneChangePrev`（`fg\plugin.cpp:86-87`） | 不看 |
 | 顺序 | 先 validate 像素再判切（故意，防止坏像素被 fallback 掩盖，`fg\plugin.cpp:82-85`） | 先判切，判中就不分配输出帧（`frame_gen.cpp:175-187`） |
-| 行为 | hold 左帧，`fallback=1` | 同（`fallback=1`）；另外 `fallback=2`（运行库抑制）、`3`（末对无右帧） |
+| 行为 | hold 左帧，`fallback=1` | 同（`fallback=1`）；另外 `fallback=2`（运行库抑制）、`3`（末对无右帧）、`4`（重复帧复制前一帧） |
 | 运行库抑制 | 读回 `pOutputDisableInterpolation`，非 0 → hold | 同，但只在 `multiFrameCount<=1` 时信任（`ngx_session.cpp:1031`），多帧时只当提示 |
 
 本仓的单指标 + 更密采样（1080p 约 9.7 万样本 vs 参考 6912 样本）对整体淡化/曝光跳变更

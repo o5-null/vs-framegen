@@ -29,7 +29,8 @@ VFG 比 DLSS-G 慢约 3.5 倍（模型本身重，且每个中间帧要一条独
 |---|---|---|
 | `multi` | 2 | 每对相邻帧插 `multi-1` 张，上限见上表 |
 | `mv` | 无 | 可选光流剪辑（RGB(S)，2 或 3 平面，全尺寸或半尺寸），像素单位、第 k 帧指向 k−1 |
-| `scene_threshold` | 0.15 | 相邻帧三平面 8 采样平均绝对差超阈值判切镜、整对 hold |
+| `scene_threshold` | 0.12 | 只在源没有 `_SceneChange*` 属性时用：两帧亮度梯度方向直方图（9 bin 无符号，4 像素采样）的 L1/2 距离超阈值判切镜、整对 hold。判据不含亮度，闪光/曝光跳变不误判；有效梯度覆盖 <5% 的帧（黑场/渐隐）直接判非切镜 |
+| `duplicate_threshold` | 0.005 | 重复帧判定：32px 块内亮度最大差低于它即复制前一帧、跳过引擎（`_DLSSGFallback=4`）。luma 归一化 [0,1]，0.005 ≈ 4.4 个 10bit 码值；0 关闭 |
 | `proxy_dir` | `<DLL 目录>\<引擎包目录>` | 引擎包目录 |
 | `gpu` | 0 | 适配器序号 |
 | `camera` | 0 | DLSS 专有（相机类型），其它引擎忽略 |
@@ -291,7 +292,7 @@ multi=6 时 5 条 lane 原本各持有一份相同的两帧（1080p 每 lane 80 
 ## 已知限制
 
 1. 四个插件各自单进程单尺寸：换分辨率要重启进程。
-2. 都只接受 `RGBS`（`cfRGB` + `stFloat` + 32 bit + 3 平面）。
+2. 输入接受平面 YUV（8..16bit，4:2:0/4:2:2/4:4:4，无色度子采样超过 2 倍）或 `RGBS`（`cfRGB` + `stFloat` + 32 bit + 3 平面）；其它格式报 `clip must be RGBS (float32 RGB) or planar 8..16-bit YUV`。
 3. 插件把输出帧率乘上 `multi` 并逐帧写 `_Duration`/`_AbsoluteTime`，不要再自己 `AssumeFPS`。
 4. `camera` 只对 DLSS 有效。
 5. `vdlssg` 与 `vxessfg` 不能同进程共存：NGX 的核（`nvngx.dll`）和 dlssg snippet 都按名字加载、每进程只能 init 一次，先 init 的代理凭自己的 `dlssg_sm86.ini` 固定 `Engine=DLSS` 还是 `XeSS`，后者的 `EvaluateDlssg`/`CreateDlssgFeature` 会返回 `0xbad00004`/`0xbad00001`。插件现在用进程级命名互斥量提前拦截，报 `another NGX engine plugin (vdlssg) already initialized NGX in this process; ... load only one of vdlssg / vxessfg per script`。`vvfg`、`vfsr4` 不受影响（前者只用 CUDA driver API，后者只用 vkd3d + Vulkan）。对比四个引擎跑 `test\all_engines.py`，它按引擎各起一个子进程。

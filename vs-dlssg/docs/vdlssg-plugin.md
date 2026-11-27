@@ -1,11 +1,12 @@
 # vdlssg — DLSS-G 帧生成 VapourSynth 插件
 
-`core.vdlssg.FrameGen(clip, multi=2, proxy_dir, gpu=0, scene_threshold=0.15, preset=None, log=0)`
-输入 RGBS，输出 N→multi·N（`multi` = 2..6，即每对源帧插 `multi-1` 帧；6× 见
+`core.vdlssg.FrameGen(clip, multi=2, proxy_dir, gpu=0, scene_threshold=0.12, duplicate_threshold=0.005, preset=None, log=0)`
+输入：平面 YUV 8..16bit 或 RGBS；输出 N→multi·N（`multi` = 2..6，即每对源帧插 `multi-1` 帧；6× 见
 `docs\vdlssg45-engine.md`）。
-每组 `multi` 帧里槽 0 原样返回源帧，槽 1..multi-1 由 DLSS-G 合成；末组不足时 hold，切镜吐源帧。
-属性：`_DLSSGGenerated` / `_DLSSGFallback`(0 正常 / 1 切镜 / 2 运行库抑制 / 3 末帧 hold) /
-`_DLSSGSceneCut` / `_DLSSGMultiFrameIndex`(0..multi-1)。
+每组 `multi` 帧里槽 0 原样返回源帧，槽 1..multi-1 由 DLSS-G 合成；末组不足时 hold，切镜吐源帧，
+重复帧整组复制前一帧。
+属性：`_DLSSGGenerated` / `_DLSSGFallback`(0 正常 / 1 切镜 / 2 运行库抑制 / 3 末帧 hold / 4 重复帧) /
+`_DLSSGSceneCut` / `_DLSSGDuplicate` / `_DLSSGMultiFrameIndex`(0..multi-1)。
 
 多帧的插值位置**只由 `multiFrameIndex` 决定**，与求值顺序无关（见 `vdlssg-multiframe.md`）。
 同一 reset 后连续求值多个 index 时，运行库只对第一个写 `disable=0`，其余置 1（"别呈现"提示），
