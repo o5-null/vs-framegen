@@ -18,7 +18,7 @@
 | 档位 | 包 | 用途 |
 |---|---|---|
 | 默认 | `mpv-playkit-pre-<版本>-windows-x64-vsdlssg.7z`（约 338 MB） | 播放 + 四个帧生成引擎（DLSS-G / XeSS-FG / VFG / FSR-FG），大多数机器选这个 |
-| 推理 | `mpv-playkit-pre-<版本>-windows-x64-vs-mlrt.7z`（约 681 MB） | 播放 + TensorRT-RTX 超分/去块/RIFE/DRBA（体积大，需 Turing+ 驱动）；**不带四个帧生成引擎运行时** |
+| 完整 | `mpv-playkit-pre-<版本>-windows-x64-vs-aji.7z`（约 750 MB） | 默认档的全部内容 + aji（AnimeJaNai libaji）补帧/超分/时序（含 TensorRT / TensorRT-RTX 运行库与 8 个模型） |
 
 **不再需要叠加补丁包**：每个归档都是完整播放器，解压出来的目录结构一致：
 
@@ -32,10 +32,10 @@ mpv-playkit-pre-<版本>-windows-x64-vsdlssg\
     dlss45\  xessfg\  vfg\  fsr4\  ← 四颗帧生成引擎运行时（默认档）
 ```
 
-`vs-mlrt` 档在同样结构上多出 `Lib\site-packages\vapoursynth\plugins\vsmlrt\`
-（插件 + TensorRT-RTX 运行库 + 模型），但**不含**上面四颗帧生成引擎的运行时；
-要两者兼得，把默认档的 `vs-plugins\{dlss45,xessfg,vfg,fsr4}` 拷进 `vs-mlrt` 档即可。
-四个 DLL 所有档位都有。两档互斥：想换档就整个目录换掉。
+`vs-aji` 档是**默认档的完整版**：四颗帧生成引擎与上面完全一样，另外在同样结构上多出
+`vs-plugins\aji\`（`vsaji.dll` + `aji.dll` / `aji_trt.dll` / `aji_trtrtx.dll`、
+TensorRT 与 TensorRT-RTX 运行库、conf、8 个模型）和
+`Lib\site-packages\vapoursynth\plugins\vsaji.dll`。两个包各自独立，想换档就整个目录换掉。
 
 双击 `mpv.exe`（不带文件）会打开 `No file - mpv` 空窗口并常驻：包里
 `portable_config\playkit-preset.conf` 默认 `idle = yes`，覆盖了上游 `mpv.conf` 的 `idle = no`，

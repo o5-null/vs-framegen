@@ -101,9 +101,18 @@ Performance 10.8 ms/帧；1080p Balanced 57.2 ms/帧），整帧模型仍需能�
 不给超分模型的纯时序链也支持（输出尺寸不变）。`Rife` 不接受这类 conf（它没有 `model_dir`）。
 
 非时序链默认开 3 槽预取流水线（`aji_flush/aji_wait` 票据 + 每槽一套设备缓冲），把 CPU 侧的
-打包/上传/回读和 GPU 计算叠起来：720p 6.5 → 5.7 ms/帧、1080p→2160p 45.6 → 33.5 ms/帧
-（RTX 3080，测量时后台有游戏占卡，非干净基线）。输出逐帧哈希与关闭流水线时一致；
-`AJI_PREFETCH=0` 可关掉做对照。时序链不走流水线。k7 侧不需要改动。
+打包/上传/回读和 GPU 计算叠起来。RTX 3080、无后台占用、native 内核下 200 帧均值：
+
+| 场景 | 流水线开 | 关 | 加速（中位） |
+|---|---|---|---|
+| 720p → 1440p 8bit | 3.56 ms/帧 | 5.03 | 1.41×（1.56×） |
+| 1080p → 2160p 8bit | 7.36 ms/帧 | 10.25 | 1.39×（1.64×） |
+| 720p → 1440p 10bit | 4.55 ms/帧 | 6.66 | 1.46×（1.83×） |
+
+输出逐帧哈希与关闭流水线时一致（顺序播放和跳帧/倒放混合顺序都比过）；`AJI_PREFETCH=0`
+可关掉做对照。时序链不走流水线；RIFE（`Rife` 滤镜）也仍是单槽——`init` 里只有
+`upscale_ && temporal_r_==0 && complete_pipeline()` 才给 3 槽，所以插帧路径的 1.00× 是设计
+如此，不是流水线失效。k7 侧不需要改动。
 
 ## 4. conf 模板（k7 自动生成）
 
@@ -159,3 +168,29 @@ chain_1_rife_model=<code>
   后端加载失败（error 126），即使 conf 只走原生内核。`Version()["missing"]` 会提前指出。
 - 授权：插件 MIT、引擎保留所有权利。仅本机自用时无顾虑；对外分发不要把 libaji 打进包里，
   让使用者自己按 vsaji 的脚本构建。
+
+## 7. mpv 侧：一个脚本、一条滤镜
+
+mpv 的 `vf_vapoursynth` 同时只能存在一个实例（`mpv-src/video/filter/vf_vapoursynth.c:582`
+在销毁时断言 `!p->in_node_active`），所以「补帧 + 超分 + 时序」不能靠 `vf append` 叠三条链，
+必须写进同一个 vpy、由 VS 内部节点串联。
+
+`mpv/portable_config/vs/MIX_AJI.vpy` 就是这个脚本：
+
+```python
+Framegen = "vaji"    # vaji|vdlssg|vxessfg|vvfg|vfsr4|off —— 补帧层用哪个引擎
+Stages = "f"         # f/u/t 的组合，顺序固定：补帧 → 超分 → 时序
+```
+
+- 面板 `scripts/k7f_vpypar.lua` 只维护**一条** `vapoursynth` 滤镜，参数写在 `user-data`
+  （`stages=fut;framegen=vaji;rife_model=4.14;upscale_model=hd_perf;tfix_model=s1;device=auto…`）。
+  切层/切引擎只是重建这一条，不改脚本文件，也不需要「实时生成 vpy」。
+- 键名用长名（`rife_model`/`upscale_model`/`tfix_model`/`device`），`mod_vpy.py` 的
+  `_normalize_ud()` 把它们映射回内部短名，单层脚本的旧键（`model`/`model_upscale`/`gpu`）仍然有效。
+- vsfg 与 aji 同脚本已双向验证：mpv 里 480x360 源输出 `960x720`（DLSSG 2× 后 aji 超分 2×），
+  VS 级（`core.vdlssg.FrameGen` → `core.vsaji.Upscale`）逐帧哈希正常。
+- 旧的单层脚本（`MEMC_RIFE_AJI.vpy` / `MIX_UPSCALE_AJI.vpy` / `MIX_TFIX_AJI.vpy`）保留兼容，
+  面板会把它们替换成 `MIX_AJI.vpy`。
+- 右键菜单预设（`mpv-playkit/manifests/config.yml` 的 `aji_rife/aji_upscale/aji_tfix/aji_stack`）
+  不再写 `vf set` 命令，而是 `script-message-to k7f_vpypar set …` + `apply`，由面板统一建链。
+
