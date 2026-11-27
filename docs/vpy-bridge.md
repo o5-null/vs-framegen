@@ -14,7 +14,7 @@
 | --- | --- | --- |
 | `mod_vpy.py` | K7sfunc 包内（`Lib/site-packages/k7sfunc/`） | vpy 侧：`FRAMEGEN_VPY` 宿主、`VPY_PARSE_USER_DATA` / `VPY_GET`、`VPY_LOAD_PLUGIN`、`VPY_PUBLISH` |
 | `k7f_bridge.lua` | `portable_config/scripts/` | mpv 侧：拼 `user-data`、轮询/格式化报告 |
-| `k7f_vpypar.lua` | `portable_config/scripts/` | 现成前端：OSD 菜单 + 自愈 + 显示“设置/实际” |
+| `k7f_vpypar.lua` | `portable_config/scripts/` | 现成前端：按 `vf` 链自动认引擎、OSD 菜单 + 自愈 + 显示“设置/实际” |
 
 部署时两个 lua 都要在，且需要在 `mpv-playkit/manifests/components.yml` 的 k7sfunc `paths`
 白名单里逐条列出，否则不进包；`mod_vpy.py` 跟着 `src/k7sfunc` 整目录复制，不用单列。
@@ -27,8 +27,8 @@
   这些字符会破坏 vf 子参数解析——`k7f_bridge.lua` 的 `build_user_data()` 会跳过非法值并 warn。
 - 需要原样传递含这些字符的内容时，改用环境变量（不进 vf 串），不要在 `user-data` 里硬塞。
 - 优先级由 `FRAMEGEN_VPY` 统一决定：**脚本字面量 < 环境变量 < `user-data`**（顺带按引擎表钳制）。
-- 改任意值都要重建 `@label:vapoursynth=…` 这条滤镜，引擎会重新初始化（百毫秒到秒级卡顿）。
-  seek 会重跑 vpy，但 `user-data` 不变，参数不会丢。
+- 改任意值都要重建链上那条 `vapoursynth` 滤镜（按 `params.file` 认，不看标签），
+  引擎会重新初始化（百毫秒到秒级卡顿）。seek 会重跑 vpy，但 `user-data` 不变，参数不会丢。
 
 vpy 侧读取（补帧脚本不用自己写这一段，`FRAMEGEN_VPY` 内部已做）：
 
@@ -127,6 +127,11 @@ end)
 
 现成的 `k7f_vpypar.lua` 已经把两边接好：
 
+- 引擎：按 `vf` 链里 `vapoursynth` 的 `params.file` 文件名认（`MEMC_DLSSG_NV.vpy` /
+  `MEMC_XESSFG_NV.vpy` / `MEMC_VFG_NV.vpy` / `MEMC_FSR4.vpy`），参数候选按引擎给；
+  链上没有 vpy 时用 `script-opts k7f_vpypar-script` 兜底（默认 DLSSG）；
+- 状态：`~~/_cache/k7f_vpypar.json` 按脚本名分桶，旧的扁平结构读入时归 DLSSG；
+  `multi` 归 `k7f_multi.lua` 管，链上已有时以链为准；
 - 改参后 5 秒内收到新报告，弹一次 `实际：…`；
 - `script-message-to k7f_vpypar status` 输出两行：`设置：…` 和 `实际：…`；
 - 找不到滤镜时清空 `remote`，不会一直显示上一部片的报告。

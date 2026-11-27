@@ -60,21 +60,23 @@ VFG 固定 2×、FSR4 固定 2× 所以只认 `scene/pre_h/gpu/log`（FSR4 另�
 
 一个脚本完成「OSD 菜单 → 改状态 → 重建滤镜」：
 
-- 状态：`multi / preset / scene / pre_h / log` 五组候选值（`preset` 仅对 DLSSG 生效，候选 `A` / `C · FG Lite`），落盘到 `~~/_cache/k7f_vpypar.json`，下次启动沿用。
+- 多引擎：按 `vf` 链里 `vapoursynth` 的 `params.file` 文件名认引擎（DLSSG / XeSS-FG / VFG / FSR4），
+  没挂任何 vpy 时用 `script-opts k7f_vpypar-script` 兜底。参数候选按引擎生成：
+  `multi`（DLSSG/VFG 2–6，XeSS-FG 只有 2，FSR4 无）、`preset`（DLSSG，A / C·FG Lite）、
+  `mode`（VFG low/medium/high）、`camera`（FSR4 关闭/0/1/2/4），
+  其余 `scene / duplicate / pre_h / gpu / log` 四个引擎共用。
+- 状态：`~~/_cache/k7f_vpypar.json` 按脚本名分桶（`{"memc_dlssg_nv.vpy":{"multi":"4",...}}`），
+  旧的扁平结构会当成 DLSSG 的一份读入；`multi` 归 `k7f_multi.lua` 管，链上已有时以链为准。
 - OSD 菜单：`mp.input.select()` 两级列表（主菜单显示「名称：当前值」，选中进候选值列表），选完立刻重建并回到主菜单。
-- 重建就是一条命令：
-
-  ```lua
-  vf append @VDLSSG:vapoursynth="<脚本绝对路径>":user-data="multi=4;preset=c;scene=0.35;pre_h=0;log=0"
-  ```
-
-  同名标签会整条替换，**一次链更新、只重建这一条滤镜**，其它滤镜（`format`、着色器等）不受影响。
-  标签必须带 `@` 前缀（`@VDLSSG:…`）；不带 `@` 的话 mpv 会当成另一个滤镜追加，结果是两条 vpy 串联。
+- 重建：整条链只替换目标那条 vpy —— 按 `params.file` 认出当前引擎的所有条目，剔除后追加一条带 `label` 的，
+  一次 `set_property_native('vf', chain)` 落地；重建后复核条目数必须为 1（多于 1 会报错并再合并一次）。
+  顺序与其它滤镜（`format`、着色器等）保持不变。
 - 接管无标签的预设：menu.conf 里的 `vf set vapoursynth="~~/vs/MEMC_DLSSG_NV.vpy"` 挂出来的滤镜没有标签，
-  脚本会按文件名认领它，先用 `vf remove vapoursynth=<参数串>` 精确移除（写成 `vf remove vapoursynth` 单独一个名字**不生效**），
-  再加带标签的版本。此后所有改参都是单条 `append` 替换。
-- 观察者自愈：`mp.observe_property('vf')` 发现「同名标签但 user-data 与状态不一致」时延时 0.05 s 补一次参数，
-  所以用户点菜单预设、或别的脚本重挂滤镜，也不会退回脚本里的硬编码默认值。
+  脚本按文件名认领它（旧实现要先用 `vf remove vapoursynth=<参数串>` 精确移除，现已不需要），
+  此后所有改参都是「重建这一条」。
+- 观察者自愈：`mp.observe_property('vf')` 发现引擎变了就切换上下文并重建状态桶；
+  `user-data` 与当前状态不一致时延时 0.05 s 补一次参数，所以用户点菜单预设、或别的脚本重挂滤镜，
+  也不会退回脚本里的硬编码默认值。
 - 对外接口：`script-binding k7f_vpypar/menu`；`script-message-to k7f_vpypar set <key> <value>` / `apply` / `menu` / `close` / `status`。
 - 上行：vpy 末尾调用 `k7f_bridge.publish()` 写 `<脚本名>.k7f.json`，本脚本每 0.5 s 轮询；改参后 5 秒内到达的新报告会弹一次 `实际：…`，`status` 消息输出“设置/实际”两行。接口细节见 `docs/vpy-bridge.md`。
 
@@ -87,28 +89,28 @@ VFG 固定 2×、FSR4 固定 2× 所以只认 `scene/pre_h/gpu/log`（FSR4 另�
 5. **插件是进程内单实例单尺寸**（见 `docs/mpv-dlssg.md` 坑 3）：换片源分辨率仍旧要重启 mpv，OSD 改参解决不了这个。
 6. 实测中见过一次「改参瞬间 mpv 静默退出」，同一命令复跑 3 次都不再复现（真实 mpv-lazy 配置 + 真 vdlssg 引擎）；`--hwdec=no` 下未出现过。若遇到，先判 hwdec。
 
-## 5. 部署（mpv-lazy）
+## 5. 部署
 
-1. `portable_config\vs\` 放四个 `MEMC_*.vpy`（脚本内置选项，逻辑在 `k7sfunc` 包里）；`portable_config\scripts\` 放 `k7f_vpypar.lua` 与 `k7f_bridge.lua`。
-2. `input_uosc.conf` 加一行键位：
+两边各放一半：
 
-   ```
-   Ctrl+v            script-binding k7f_vpypar/menu                          #! 工具 > 补帧参数 (OSD 调参)
-   ```
-
-3. （可选）`menu.conf` 的 VF 段加一项，直接从原生菜单进：
-
-   ```
-   	补帧参数 (Dlss)	vf set @VDLSSG:vapoursynth="~~/vs/MEMC_DLSSG_NV.vpy" ; script-message-to k7f_vpypar menu
-   ```
-
-4. script-opts 默认值即可，要换引擎就覆盖：
+1. k7sfunc 侧（`k7sfunc/mpv/portable_config/`）：`vs\` 放四个 `MEMC_*.vpy`，`scripts\` 放
+   `k7f_vpypar.lua` 与 `k7f_bridge.lua`。这四个 vpy 已经在 mpv-playkit 的 k7sfunc 组件白名单里，
+   打包时按 `components.yml` 的 paths 复制，不需要额外映射。
+2. mpv-playkit 侧（本仓库）：`manifests/config.yml` 新增 `vpypar` 段
+   （`section: 补帧参数 (&V)` / `target: k7f_vpypar` / `key: V`），由 `build/config.py` 渲染进
+   `input_uosc.conf` 与 `menu.conf` 的 `playkit-config:vpypar` 标记区。生成条件是**本档位包启用了
+   任一 `multi: true` 的预设**（即带帧生成），与 `multi` 段同进同退；`base` 档位包不出现这两处。
+   - `input_uosc.conf`：` V  script-binding k7f_vpypar/menu  #! VF 滤镜 > 补帧参数`（`v` 已用于音频延迟）
+   - `menu.conf`：`补帧参数 (&V)` → `打开参数面板 (&A)` / `当前参数 (&S)`
+3. script-opts 只剩「链上没有 vpy 时认哪个引擎」的兜底，日常不用配：
 
    ```
-   script-opts-append = k7f_vpypar-label=VDLSSG
    script-opts-append = k7f_vpypar-script=~~/vs/MEMC_DLSSG_NV.vpy
    script-opts-append = k7f_vpypar-state_file=~~/_cache/k7f_vpypar.json
    ```
+
+4. 手动给 mpv-lazy 之类没有这套构建流程的配置装时，等价写法是 `input.conf` 一行
+   `V  script-binding k7f_vpypar/menu`，菜单项同理。
 
 ## 6. 实测记录
 
