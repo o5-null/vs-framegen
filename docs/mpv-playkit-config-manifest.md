@@ -123,10 +123,13 @@ CI（`.github/workflows/build.yml`）的流程是 `fetch → assemble → smoke 
   ```
   原生滤镜 (&P)
       清空 (&C)	vf clr playkit; set hwdec auto-copy
-      DLSS 帧生成 (&D)
-          2× (&2)	set hwdec d3d11va; vf set playkit:multi=2:dll=vs-plugins/vdlssg.dll:proxy_dir=vs-plugins/dlss45
-          … 3× / 4× / 5× / 6× 同形
+      DLSS 帧生成 (&D)	set hwdec d3d11va; script-message-to k7f_multi native playkit:dll=vs-plugins/vdlssg.dll:proxy_dir=vs-plugins/dlss45
   ```
+
+  倍率不再做成子菜单（2026-11-27）：每条目只有一条命令，交给 `k7f_multi.lua` 的 `native`
+  消息，由它把当前「倍数」注入同一次 `vf set`（避免“先按 6× 建链再改”引起的二次引擎初始化）；
+  全局未设定时原生滤镜按 2× 建链（`vf_playkit` 自带默认 6× 太激进）。清单里的 `multi: [...]`
+  字段已废弃，写了会被 `validate()` 直接拒绝。
 
 - 同时修掉两个 `menu.conf` 渲染缺陷（实测 `menu-data` 才发现）：`select.lua` 只按 `\t+`
   切分、不认 `#` 注释，原来 `# >>> playkit-config:vf` 这类标记与 "本包未启用" 注释全变成了

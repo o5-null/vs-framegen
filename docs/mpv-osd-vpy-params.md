@@ -68,6 +68,8 @@ VFG 固定 2×、FSR4 固定 2× 所以只认 `scene/pre_h/gpu/log`（FSR4 另�
 - 状态：`~~/_cache/k7f_vpypar.json` 按脚本名分桶（`{"memc_dlssg_nv.vpy":{"multi":"4",...}}`），
   旧的扁平结构会当成 DLSSG 的一份读入；`multi` 归 `k7f_multi.lua` 管，链上已有时以链为准。
 - OSD 菜单：`mp.input.select()` 两级列表（主菜单显示「名称：当前值」，选中进候选值列表），选完立刻重建并回到主菜单。
+  在候选值列表按 Esc 只退回主菜单（`closed` 回调里重开主菜单），在主菜单按 Esc 才关闭面板；
+  `close` 消息可直接关闭，不会被 `closed` 回调再拉起。
 - 重建：整条链只替换目标那条 vpy —— 按 `params.file` 认出当前引擎的所有条目，剔除后追加一条带 `label` 的，
   一次 `set_property_native('vf', chain)` 落地；重建后复核条目数必须为 1（多于 1 会报错并再合并一次）。
   顺序与其它滤镜（`format`、着色器等）保持不变。
