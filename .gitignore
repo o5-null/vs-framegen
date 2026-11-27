@@ -76,4 +76,8 @@
 *.cubin
 __pycache__/
 *.py[cod]
+.pytest_cache/
 .vscode/
+
+# 测试套件产物（保留目录，忽略每次运行的结果）
+/test/artifacts/

@@ -68,3 +68,32 @@ uv pip install --python .venv\Scripts\python.exe vapoursynth==74 numpy vsrepo
 - aji 的分阶段计时桩默认关闭，`AJI_PROFILE=1`（`AJI_PROFILE_EVERY=N`，默认 10 帧）打开，
   stderr 出 `[aji-profile/plugin]`（上传/交织/回传）与 `[aji-profile/trt]`（setup…infer…crop）两行；
   桩在 `vsaji\src\aji_host.cpp`、`aji_frames.cpp`、`.deps/engine/src/aji_trt.cpp`，改完要重编 engine + 插件。
+
+## 测试套件（test\suite）
+
+`test\suite` 是仓库唯一的自动化测试入口（pytest）：
+
+```
+.venv\Scripts\python.exe -m pytest test\suite          # 全套，约 15 秒
+.venv\Scripts\python.exe -m pytest test\suite -m "not slow"
+```
+
+- 覆盖：环境自检 / VS 无头出帧与插件 / mpv 落盘与转换 / 色彩矩阵与位深 / 重复帧与黑帧 /
+  playkit stage / 吞吐 / vdlssg FrameGen。判定全部是数值（PNG 序列 → numpy），不靠人眼。
+- `test\` 根目录的历史一次性脚本只留档：`docs\*.md` 按 `test\<script>.py` 引用它们，
+  不要移动或改名，也不要再往里加东西；规则写在 `test\AGENT.md`。
+- 详细跑法、产物布局、环境变量（`VFI_MPV`/`VFI_PLAYKIT`/`VFI_DUMP` …）见
+  `test\suite\README.md`；写用例前先读 `test\AGENT.md` 的「mpv + VapourSynth 实测坑」。
+
+## mpv + VapourSynth 实测坑（测试/调试通用）
+
+1. vpy 画面必须由 `video_in` 派生：纯 `BlankClip` 直接输出会让 mpv-lazy 崩在 `0xC0000409`。
+2. `std.ModifyFrame` 在 mpv 的 VS 桥下必挂（rc=2、0 帧）；改属性用 `std.SetFrameProp`，
+   逐帧 dump 用 `std.FrameEval(fn, clip)`（第二个参数不能是空数组）。
+3. VS 输出帧数不能短于输入（mpv 按输入时间轴请求帧）；冻结画面用 `std.Loop(video_in[0:1], 400)`。
+4. VS 的 `_Matrix`/`_ColorRange` 属性不参与 mpv 的 VO 转换，色彩标签用 `--vf=format=...`
+   （`colormatrix` 没有 `bt.2020`，用 `bt.2020-ncl`）。
+5. VS 脚本失败是**静默降级**（mpv 退出码仍 0，只在日志留 `Script evaluation failed` /
+   `Could not get script output node` / `Disabling filter`）——调试先 grep 这三句。
+6. `--vf=vapoursynth=` 的参数里不能出现反斜杠或盘符（`:` 是参数分隔符）。
+7. `mpv --version` 不打印构建选项，判断 VS 支持用 `mpv --no-config --vf=help`。
