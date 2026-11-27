@@ -5,7 +5,7 @@
 
 - 插件 + 构建脚本：`E:\code\dlssg-vfi\vsaji`（github.com/o5-null/vsaji，MIT）
 - k7 接入：`E:\code\dlssg-vfi\k7sfunc` 的 `RIFE_AJI`（`src/k7sfunc/mod_memc.py:1095`）
-- 打包产物：`vsaji/dist/aji/` → 播放器 `<包根>\vs-plugins\aji\`，其中的 `rife_aji.dll` 单独进
+- 打包产物：`vsaji/dist/aji/` → 播放器 `<包根>\vs-plugins\aji\`，其中的 `vsaji.dll` 单独进
   `Lib\site-packages\vapoursynth\plugins\`（见 DECISIONS 第 17 条）
 
 本文只留结论与对接约定；构建细节看 vsaji 的 README。
@@ -25,7 +25,7 @@
 ## 2. 我们这套的形态
 
 ```
-rife_aji.dll         VS 插件（本仓库写的胶水，MIT）
+vsaji.dll         VS 插件（本仓库写的胶水，MIT）
 aji.dll              libaji dispatcher（上游 release v0.33.0）
 aji_trt.dll          后端：CUDA 原生 RIFE 内核 + TensorRT 引擎路径（上游）
 aji_dml.dll / aji_vk.dll  DirectML / Vulkan 后端（上游，随包但本宿主用不了）
@@ -60,7 +60,7 @@ rife\                rife_v4.*.onnx
 ## 3. 插件接口
 
 ```python
-core.rife_aji.Rife(clip, conf, rife_model_dir, factor=2, device=0,
+core.vsaji.Rife(clip, conf, rife_model_dir, factor=2, device=0,
                    matrix=-1, range=-1, scene_prop=1, lib="", fps=25.0, backend="")
 ```
 
@@ -81,7 +81,7 @@ core.rife_aji.Rife(clip, conf, rife_model_dir, factor=2, device=0,
 同一个插件还注册了超分滤镜（k7 侧暂无封装）：
 
 ```python
-core.rife_aji.Upscale(clip, conf, model_dir="", device=0, matrix=-1, range=-1,
+core.vsaji.Upscale(clip, conf, model_dir="", device=0, matrix=-1, range=-1,
                       lib="", fps=25.0, backend="")
 ```
 
@@ -116,7 +116,7 @@ chain_1_rife_model=<code>
 
 - `src/k7sfunc/mod_memc.py:1095-1217` `RIFE_AJI(input, model, ensemble, fps_in, fps_num,
   fps_den, sc_mode, gpu)`：`_aji_runtime_dir()` 依次看 `AJI_DIR` → `Version()["aji"]` → 插件同级/
-  上级 `aji\` → `<包根>\vs-plugins\aji` → 生成/复用 conf → 调 `core.rife_aji.Rife` →
+  上级 `aji\` → `<包根>\vs-plugins\aji` → 生成/复用 conf → 调 `core.vsaji.Rife` →
   `AssumeFPS(fps_in * factor)`；非整数倍率直接报错。
 - `PLAYKIT_MEMC` 也可以直接用：`memc_engine=aji`，顺序在 `rife_nv` 之后（`mod_playkit.py`）。
 - `mpv/portable_config/vs/MEMC_RIFE_AJI.vpy`：`_here` 递归找 `vs-plugins`、`AJI_*` 环境变量。

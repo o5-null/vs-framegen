@@ -291,7 +291,7 @@ powershell -ExecutionPolicy Bypass -File vsaji\scripts\build-plugin.ps1 -VsInclu
 > `fetch-trt-rtx.ps1` 已在 2026-11-27 随「后端改用上游 release」退役（现在只需
 > `fetch-aji.ps1` + `build-plugin.ps1` + `pack.ps1`）。`AJI_PROFILE` 插桩在插件侧仍然有效。
 
-产物在 `vsaji/out/engine/`、`vsaji/out/rife_aji.dll`；本轮的 DLL 已复制到 `work/aji-models/`（TensorRT 包）
+产物在 `vsaji/out/engine/`、`vsaji/out/vsaji.dll`；本轮的 DLL 已复制到 `work/aji-models/`（TensorRT 包）
 与 `work/aji-rtx/`（TRT-RTX 包）。插桩只影响 `AJI_PROFILE=1` 时的输出，**不改变计算结果**——
 同一帧在 native / TRT / TRT-RTX 三条路径下 psnr_y 64.6 dB（max 差 6），差异纯属 fp16 舍入。
 
@@ -302,7 +302,7 @@ powershell -ExecutionPolicy Bypass -File vsaji\scripts\build-plugin.ps1 -VsInclu
 
 | 模型 | vs-mlrt（`RIFE_NV`） | aji（`RIFE_AJI`） | aji 的失败点 |
 | --- | --- | --- | --- |
-| `4.6` | ✅ 28.5 / 29.2 ms | ❌ `rife_aji: aji_infer_rife: rife enqueueV3 failed` | TRT 引擎建成（746 MB，44.4 s），首帧推理失败：ONNX 是 fp32，aji 按 fp16 绑定 |
+| `4.6` | ✅ 28.5 / 29.2 ms | ❌ `vsaji: aji_infer_rife: rife enqueueV3 failed` | TRT 引擎建成（746 MB，44.4 s），首帧推理失败：ONNX 是 fp32，aji 按 fp16 绑定 |
 | `4.25_lite` | ✅ 30.8 / 33.8 ms | ❌ `aji_configure: trtexec failed building engine for rife_v4.25_lite` | trtexec：`Error[4]: API Usage Error (IElementWiseLayer /Mul: broadcast dimensions must be conformable …)`，随后 `Attempting to access an empty engine!` |
 | `4.26` | ✅ 33.4 / 37.0 / 39.5 ms | ✅ 9.4–11.2 ms（native） | — |
 | `4.26_heavy` | ✅ 40.8 / 42.5 ms | ❌ `模块 RIFE_AJI 的子参数 model 的值无效` | k7 参数层拒绝；aji 也没有 heavy 的模型名 |
