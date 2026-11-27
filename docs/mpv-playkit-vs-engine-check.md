@@ -168,7 +168,7 @@ os.path.join(_here, os.pardir, os.pardir, "vs-plugins", "<dll>")
 
 ## 附：通用倍数菜单（`k7sfunc` `78bc8b0`、`mpv-playkit` `d0ca253`）
 
-`VF 滤镜 > 倍数` 对所有会读 `user-data` 的插帧预设生效：
+根层的 `倍数 (&M)`（2026-11-27 起从 `VS 滤镜` 段挪到着色器之后）对所有会读 `user-data` 的插帧预设生效：
 
 - 脚本 `k7sfunc\mpv\portable_config\scripts\k7f_multi.lua`，状态存
   `~~/_cache/k7f_multi.json`（`{ "multi": N }`，删除即“跟随预设”）；

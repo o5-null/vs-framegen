@@ -99,11 +99,11 @@ VFG 固定 2×、FSR4 固定 2× 所以只认 `scene/pre_h/gpu/log`（FSR4 另�
    `k7f_vpypar.lua` 与 `k7f_bridge.lua`。这四个 vpy 已经在 mpv-playkit 的 k7sfunc 组件白名单里，
    打包时按 `components.yml` 的 paths 复制，不需要额外映射。
 2. mpv-playkit 侧（本仓库）：`manifests/config.yml` 新增 `vpypar` 段
-   （`section: 补帧参数 (&V)` / `target: k7f_vpypar` / `key: V`），由 `build/config.py` 渲染进
+   （`section: 设置 (&V)` / `target: k7f_vpypar` / `key: V`），由 `build/config.py` 渲染进
    `input_uosc.conf` 与 `menu.conf` 的 `playkit-config:vpypar` 标记区。生成条件是**本档位包启用了
    任一 `multi: true` 的预设**（即带帧生成），与 `multi` 段同进同退；`base` 档位包不出现这两处。
-   - `input_uosc.conf`：` V  script-binding k7f_vpypar/menu  #! VF 滤镜 > 补帧参数`（`v` 已用于音频延迟）
-   - `menu.conf`：`补帧参数 (&V)` → `打开参数面板 (&A)` / `当前参数 (&S)`
+   - `input_uosc.conf`：` V  script-binding k7f_vpypar/menu  #! 设置 > 补帧参数`（`v` 已用于音频延迟）
+   - `menu.conf`：根层段 `设置 (&V)`（位于「工具」与「关于」之间）→ `打开参数面板 (&A)` / `当前参数 (&S)`
 3. script-opts 只剩「链上没有 vpy 时认哪个引擎」的兜底，日常不用配：
 
    ```

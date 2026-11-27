@@ -117,7 +117,7 @@ CI（`.github/workflows/build.yml`）的流程是 `fetch → assemble → smoke 
 ### 做了什么
 
 - 配置清单新增 `native` 段：`section` / `clear_label` / `clear_command` / `entries`。
-  `build/config.py` 的 `render_native()` 在 `menu.conf` 的 "VF 滤镜" 与 "着色器" 之间
+  `build/config.py` 的 `render_native()` 在 `menu.conf` 里紧跟 "VS 滤镜"、在 "着色器" 之前
   生成 "原生滤镜 (&P)" 段，内容只有列出的档位包才出现（当前只有 `vsdlssg`）：
 
   ```
@@ -148,20 +148,20 @@ CI（`.github/workflows/build.yml`）的流程是 `fetch → assemble → smoke 
   `menu.conf` → `menu-data` 的解析由 mpv 内置 `select.lua` 完成（见
   `mpv-src/DOCS/man/context_menu.rst`），Windows 上由 `context-menu` 弹原生菜单。
 
-- **VF 预设必须挂在 `VF 滤镜` 之下，不能挂在隐藏标记之下**（2026-11-24 修）：
+- **VS 预设必须挂在 `VS 滤镜` 之下，不能挂在隐藏标记之下**（2026-11-24 修，当时叫 "VF 滤镜"）：
   `select.lua:1393-1412` 按行首缩进建树，标记行在根层时，缩进一层的 `预设 补帧 …`
   就成了"隐藏标记的子菜单"；而 Windows 原生菜单 `build_menu()` 是先递归 `CreatePopupMenu`
   再判 `if (fState == -1) // hidden continue;`（`mpv-src/video/out/win32/menu.c:150-161`），
-  父项被跳过时子菜单随父项一起丢掉 —— 用户看到的就是 `VF 滤镜 > 只显示 清空 (&C)`。
+  父项被跳过时子菜单随父项一起丢掉 —— 用户看到的就是 `VS 滤镜 > 只显示 清空 (&C)`。
   修法：`portable_config/menu.conf` 里 `vf` 那一对标记行缩进一层（`\t# >>> playkit-config:vf
-  …`），预设行与标记同层，都落进 `VF 滤镜 (&F)` 的子菜单；`倍数 (&M)` / `原生滤镜 (&P)`
+  …`），预设行与标记同层，都落进 `VS 滤镜 (&F)` 的子菜单；`倍数 (&M)` / `原生滤镜 (&P)`
   是根层段标题，本来就不受影响，保持原样。`build/config.py` 的 `check()` 增加一条断言，
   标记行没有缩进时直接构建失败（否则这个缺陷不会在构建期暴露）。
 
 ### 实测（这次是真跑了，不是只看结构）
 
 - 菜单：在 stage 里用 `--config-dir` 指到生成的配置跑 `menu-data` 转储，`items=27`、
-  三对标记均为 `state=hidden`，`原生滤镜` 位于 `VF 滤镜` 与 `着色器` 之间
+  三对标记均为 `state=hidden`，`原生滤镜` 位于 `VS 滤镜` 与 `着色器` 之间
   （当时未启用预设还渲染成 `state=disabled`；本轮改成整行不生成，见上一条）。
 - 路径回退：把工作目录换成 `E:\code\dlssg-vfi`（不是 stage 目录）再启动 stage 的 `mpv.exe`，
   滤镜照样加载成功并打出 `playkit: D3D11 adapter ... name=NVIDIA GeForce RTX 3080`、
