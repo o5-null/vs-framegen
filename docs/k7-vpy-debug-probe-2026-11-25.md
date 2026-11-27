@@ -53,11 +53,11 @@
 
 ## 怎么用
 
-开关沿用现有 `Log` 选项，没有新开关：
+开关有两个：`Log`（往 stderr 打点）与后加的 `Stats`（把同一份计时写成 OSD 行读的 JSON），两者互相独立。
 
-- 脚本里 `Log = True`；
-- 或环境变量 `VDLSSG_LOG=1`（`VDLSSG_*` 优先级高于脚本字面量）；
-- 或 mpv 里 `script-message-to k7f_vpypar set log 1` + `apply`（'耗时日志' 选项）。
+- 脚本里 `Log = True` / `Stats = True`；
+- 或环境变量 `VDLSSG_LOG=1` / `VDLSSG_STATS=1`（`VDLSSG_*` 优先级高于脚本字面量）；
+- 或 mpv 里 `script-message-to k7f_vpypar set log 1` / `set stats 1` + `apply`（参数面板里的 '耗时日志' / '耗时显示'）。
 
 输出走 stderr（与插件的 `[vdlssg] …` / `[FG_NS]` 同一条流），`2> 文件` 就能单独收走：
 
@@ -87,6 +87,24 @@
 - **单帧 `延迟` 明显大于插件内部 `gpu`/`wall`** → 多出来的部分是排队（等空闲引擎槽位），
   这部分正是"靠并发掩盖"的时候被别的帧占着的；
 - **`间隔` 的倒数是吞吐**，与 `docs/mpv-filter-bench.md` 的 `estimated-vf-fps` 应对得上。
+
+## `Stats`：OSD 耗时行（2026-11-28）
+
+`Log` 要开 stderr 才有数，看的时候得挂控制台/日志文件。`Stats` 把同一份数据放回播放器里：
+打开后 `attach_frame_probe` 的每帧回调交给写盘器，按 `STATS_INTERVAL`（0.5 s）原子写到
+vpy 同目录 `<脚本名>.k7f-stats.json`，`k7f_vpypar.lua` 每秒读一次，在 OSC 条上方画两行：
+
+```text
+DLSSG 3× · 单帧 3.12ms p90 4.50 · 同飞 5 · 72fps
+构图 解析 0.4 · 预缩 1.2 · 加载 30.5 · 准备 0.8 · 建引擎 9.3 · 帧率 0.1 · 上报 0.6 · 探针 0.2 ms（合计 43）
+```
+
+- `stages`：构图各阶段毫秒（与 `[vpy-debug] stage …` 同一份 `Stages`），`total` 是各阶段之和，
+  构图完成后不再变化；
+- `live`：`frames / elapsed / avg / p50 / p90 / pace / fps / inflight / max_inflight / threads / last_ready`，
+  窗口与汇总行相同（最近 4096 个样本）；
+- 只开 `Stats` 时不会往 stderr 打任何东西，`FrameEval` 那点开销仍在（每帧两次空回调）；
+- 3 秒没有新数据就隐藏（暂停时保留最后一次数字），换片/移除滤镜后自动消失。
 
 ## 验证
 

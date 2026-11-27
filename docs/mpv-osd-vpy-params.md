@@ -64,7 +64,7 @@ VFG 固定 2×、FSR4 固定 2× 所以只认 `scene/pre_h/gpu/log`（FSR4 另�
   没挂任何 vpy 时用 `script-opts k7f_vpypar-script` 兜底。参数候选按引擎生成：
   `multi`（DLSSG/VFG 2–6，XeSS-FG 只有 2，FSR4 无）、`preset`（DLSSG，A / C·FG Lite）、
   `mode`（VFG low/medium/high）、`camera`（FSR4 关闭/0/1/2/4），
-  其余 `scene / duplicate / pre_h / gpu / log` 四个引擎共用。
+  其余 `scene / duplicate / pre_h / gpu / log / stats` 四个引擎共用。
 - 状态：`~~/_cache/k7f_vpypar.json` 按脚本名分桶（`{"memc_dlssg_nv.vpy":{"multi":"4",...}}`），
   旧的扁平结构会当成 DLSSG 的一份读入；`multi` 归 `k7f_multi.lua` 管，链上已有时以链为准。
 - OSD 菜单：`mp.input.select()` 两级列表（主菜单显示「名称：当前值」，选中进候选值列表），选完立刻重建并回到主菜单。
@@ -81,6 +81,16 @@ VFG 固定 2×、FSR4 固定 2× 所以只认 `scene/pre_h/gpu/log`（FSR4 另�
   也不会退回脚本里的硬编码默认值。
 - 对外接口：`script-binding k7f_vpypar/menu`；`script-message-to k7f_vpypar set <key> <value>` / `apply` / `menu` / `close` / `status`。
 - 上行：vpy 末尾调用 `k7f_bridge.publish()` 写 `<脚本名>.k7f.json`，本脚本每 0.5 s 轮询；改参后 5 秒内到达的新报告会弹一次 `实际：…`，`status` 消息输出“设置/实际”两行。接口细节见 `docs/vpy-bridge.md`。
+- 耗时行（「设置」里的「耗时显示」）：打开后 vpy 每 0.5 s 往同目录 `<脚本名>.k7f-stats.json` 写一份统计（`stages` 构图各阶段毫秒与合计、`live` 单帧平均/p90/同飞帧数/实际 fps）。本脚本每秒读一次，用独立 `osd-overlay('ass-events')` 在 OSC 条上方画两行，例如：
+
+  ```text
+  DLSSG 3× · 单帧 3.12ms p90 4.50 · 同飞 5 · 72fps
+  构图 解析 0.4 · 预缩 1.2 · 加载 30.5 · 准备 0.8 · 建引擎 9.3 · 帧率 0.1 · 上报 0.6 · 探针 0.2 ms（合计 43）
+  ```
+
+  位置读 `user-data/osc/margins`（uosc 写的底栏占比），所以开/关 OSC 都会贴着底栏上沿；
+  3 秒没有新数据（暂停、换片、滤镜被移除）就自动隐藏，暂停时保留最后一次数字。
+  `stats` 与 `log` 独立：只要 OSD 行就把 `log` 关掉，stderr 不再打点。
 
 ## 4. 代价与限制
 

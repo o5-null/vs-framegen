@@ -134,7 +134,25 @@ end)
   `multi` 归 `k7f_multi.lua` 管，链上已有时以链为准；
 - 改参后 5 秒内收到新报告，弹一次 `实际：…`；
 - `script-message-to k7f_vpypar status` 输出两行：`设置：…` 和 `实际：…`；
+- `stats` 打开时每秒读一次 `<脚本>.k7f-stats.json`，在 OSC 条上方画两行（下一节）；
 - 找不到滤镜时清空 `remote`，不会一直显示上一部片的报告。
+
+### 3.5 耗时统计 `.k7f-stats.json`
+
+与报告文件同一目录、同一命名规则，后缀换成 `.k7f-stats.json`；只在 `stats=1` 时写，
+`log` 与它互不影响（只开 `stats` 时 stderr 一个字都不打）。
+
+- 写入方：`mod_vpy._make_stats_writer()`，构图完成先写一份，之后由逐帧探针回调节流，
+  最多 `STATS_INTERVAL`（0.5 s）一次，同样是“临时文件 + `os.replace`”。
+- 字段：`v/ts/pid/script/engine/title/multi/input/output` 与报告相同，另外两项
+  - `stages`：`{parts: {resolve, resize, load, prep, framegen, fps, publish, probe}, total}`，
+    毫秒；`total` 是各阶段之和（构图时刻的成本，不随播放时间增长）；
+  - `live`：`{frames, elapsed, avg, p50, p90, pace, fps, inflight, max_inflight, threads, last_ready}`，
+    单帧延迟（`avg/p50/p90`，毫秒）、平均就绪间隔 `pace`（毫秒，取最近 60 帧）与由它换算的 `fps`。
+- 读取方：`k7f_vpypar.lua` 的 `refresh_stats()`（1 s 一次）。`engine` 与当前滤镜不符、
+  时间戳超过 3 s 或读不到文件就隐藏该行（暂停时保留最后一次）；位置取
+  `user-data/osc/margins` 的底栏高度，画在 OSC 上方；overlay id 按脚本隔离，与 uosc 不冲突。
+- 统计文件只是显示层：写失败、读失败都不影响播放，也不参与控制回路；删掉它 OSD 行自然消失。
 
 ## 4. 排错
 
@@ -148,6 +166,7 @@ end)
 | 加载脚本报找不到 `k7sfunc` | vpy 里只有 `import k7sfunc as k7f`，不再有同目录 `k7f_bridge.py`；确认包内有 `Lib/site-packages/k7sfunc/mod_vpy.py` 且版本 ≥ `1.9.0+pre.8` |
 | 报 `MEMC_XXX: 找不到 xxx.dll` | `VPY_LOAD_PLUGIN` 依次找 包根 `vs-plugins/`、脚本旁 `../`/`../../`、开发树 `vs-dlssg/bin/`；确认 `vs-framegen-dlls` 组件已装 |
 | 改了参数没生效 | 先看 `status` 的“设置”是否正确，再看“实际”是否是旧报告；重建失败看控制台 |
+| OSD 没有耗时行 | `stats` 是否为开；`<脚本>.k7f-stats.json` 是否在 `vs/` 下；`engine` 是否与当前滤镜一致；`--vo=null` 或窗口尺寸为 0 时不画 |
 
 ## 5. 边界
 
