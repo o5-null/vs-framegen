@@ -21,6 +21,9 @@
 /测试数据/
 # 代理运行目录与中间产物（TRT engine 缓存、日志）
 /work/
+# 开发用播放器（根下一次性 mpv 副本，见 AGENT.md「开发用播放器」；只保留同步脚本）
+/dev/*
+!/dev/sync.cmd
 # uv 虚拟环境（vapoursynth + numpy，见 AGENT.md；.venv 为主，.venv* 为实验环境）
 /.venv/
 /.venv*/

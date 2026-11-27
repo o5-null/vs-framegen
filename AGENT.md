@@ -3,6 +3,7 @@
 .\参考插件 不应该进行更改，只是用于参考
 .\bench 是八引擎帧生成基准（脚本 + 结果快照），原始数据在 .\测试数据\engines
 源码以 .\vs-dlssg\src 为准（一个引擎一个 DLL，build.bat 一次编四个）；.\archive 与 .\ref 只读
+.\dev 是本地开发用播放器（一次性 mpv 副本，不进 git，见「开发用播放器」）
 构建产物、引擎包、SDK、第三方装包与媒体素材不进 git（见 .gitignore）；提交前跑 git status 确认没有大文件
 
 ## Release 规则
@@ -42,6 +43,45 @@
 mpv-playkit 的 `build/common.py` 会自动识别（同级存在 `repos\dist` 或 `repos\.cache`），
 CI 上没有这个目录时退回仓库内 `.work\downloads` / `dist\out`。手动指定共享根用
 `PLAYKIT_SHARED_ROOT`。构建完的归档请放进 `repos\dist\`，不要留在各仓库的 `dist\out`。
+
+## 开发用播放器（`dev\mpv`）
+
+`dev\mpv\` 是根下的一次性测试播放器：某个 mpv-playkit stage 的完整副本（`mpv.exe`、VapourSynth、
+`Lib\site-packages\k7sfunc\`、`vs-plugins\` 里的四个帧生成插件与引擎包），双击 `mpv.exe` 就是
+portable 模式，`~~/` 展开到 `dev\mpv\portable_config\`。它**不进 git**（`.gitignore` 用 `/dev/*`
+挡掉，只保留 `dev\sync.cmd`），随时可以删掉重建：
+
+```
+robocopy repos\dist\mpv-playkit-pre-<版本>-windows-x64-vsdlssg dev\mpv /MIR
+```
+
+（当前这份来自 `mpv-playkit-pre-2026.11.20-5f1aa34-windows-x64-vsdlssg`。）
+
+为什么不用 `测试环境\mpv-lazy`：那是上游 K7 包（Python 3.8、没有 k7sfunc 的补帧桥与 `k7f_*.lua`），
+`dev\mpv` 是本仓库自维护包的布局，能直接跑 `MEMC_*.vpy` + OSD 调参。
+
+改完代码后的刷新方式（两个来源要分开同步）：
+
+1. **k7sfunc 工作树**（前端 `k7f_*.lua`、`script-opts\*.conf`、`vs\MEMC_*.vpy`、
+   `src\k7sfunc\` → `Lib\site-packages\k7sfunc\`）：跑 `dev\sync.cmd`。
+   `src\k7sfunc` 走 `/MIR`，删掉的模块会一起消失；`__pycache__` 不复制。
+2. **mpv-playkit 的配置清单**（`manifests/config.yml` / `build/config.py` 改了之后），
+   在 `mpv-playkit\` 目录下重算标记区：
+
+   ```
+   python -m build config --stage E:\code\dlssg-vfi\dev\mpv --pack vsdlssg
+   ```
+
+   这条会用基准 `portable_config` 重铺一遍（含 `vs\` 的裁剪），所以**先跑它再跑 `dev\sync.cmd`**，
+   否则 `k7f_*.lua` 会被基准版本盖回去。
+
+- 换 mpv 二进制、VS 插件、帧生成引擎包只能重新 assemble/pack 一个 stage 再 `/MIR` 覆盖——
+  这些文件不来自 k7sfunc。
+- 这份是 `vsdlssg` 档位包，`vs-plugins\` 只有四个帧生成插件；跑 vs-mlrt / TensorRT 车道请另建一份。
+- 运行期状态在 `dev\mpv\portable_config\_cache\`：`k7f_vpypar.json`（按引擎分桶）、`k7f_multi.json`、
+  各脚本的 `<脚本名>.k7f.json` 报告（后者已在 `.gitignore` 里）。
+- 命令行验证脚本时用 `dev\mpv\mpv.com`（同一份程序，控制台有输出），窗口版用 `mpv.exe`。
+
 
 ## Python 环境与包管理（uv）
 
