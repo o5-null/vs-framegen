@@ -165,6 +165,7 @@ def capture_display(
     failure = ""
     try:
         with ipclib.MpvIpc.connect(name, timeout=step_timeout, alive=lambda: proc.poll() is None) as conn:
+            _wait_loaded(conn, step_timeout)
             for idx in range(frames):
                 conn.command("frame-step", timeout=step_timeout)
                 target = f"shots/{idx + 1:08d}.png"
@@ -232,6 +233,20 @@ def _safe_prop(conn, name: str):
         return conn.get_property(name)
     except ipclib.IpcError:
         return None
+
+
+def _wait_loaded(conn, timeout: float) -> None:
+    """等 mpv 把文件真正打开后再发 ``frame-step``。
+
+    ``--pause=yes`` 下 mpv 仍要先解出首帧才会接受逐帧命令；在加载完成前发
+    ``frame-step`` 会得到 ``error running command``，整次截帧就白跑了。
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        width = _safe_prop(conn, "video-params/w")
+        if isinstance(width, int) and width > 0:
+            return
+        time.sleep(0.02)
 
 
 def _shot_with_retry(conn, target: str, timeout: float) -> dict:

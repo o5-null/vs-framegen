@@ -270,6 +270,15 @@ class Gpu {
   ComPtr<ID3D12DescriptorHeap> shareHeap_;
   ComPtr<ID3D12RootSignature> shareRoot_;
   ComPtr<ID3D12PipelineState> shareInPso_, shareOutPso_, shareLumaPso_;
+  // 直出 YCbCr：共享输出是 NV12/P010 时，compute 自己写两个平面。GPU 的视频处理器
+  // 在这台机器上不会把 BT.2020 的 YCbCr 正确编码（忽略 studio 范围、中性色度偏移），
+  // 所以引擎直接产出成品平面，mpv 侧只做一次 CopySubresourceRegion。
+  ComPtr<ID3D12RootSignature> shareYuvRoot_;
+  ComPtr<ID3D12PipelineState> shareOutYuvPso_;
+  ComPtr<ID3D12Resource> yuvOutY_, yuvOutUV_;
+  D3D12_RESOURCE_STATES yuvOutYState_ = D3D12_RESOURCE_STATE_COMMON;
+  D3D12_RESOURCE_STATES yuvOutUVState_ = D3D12_RESOURCE_STATE_COMMON;
+  bool shareOutIsYuv_ = false;
   int shareBits_ = 0;
   struct ShareParams {
     uint32_t width, height, chromaWidth, chromaHeight;

@@ -103,6 +103,26 @@ def mpv() -> Path | None:
     return found
 
 
+def dev_mpv() -> Path | None:
+    """带最新 ``vf_playkit`` 的开发构建（``work/mpvdev``）。
+
+    打包 stage 里的 mpv 固定在发布时的组件版本，回归原生滤镜得用维护仓库
+    的构建；没有就返回 ``None``，由用例自己 skip。
+    """
+    if "mpvdev" in _cache:
+        return _cache["mpvdev"]
+
+    cand: list[Path] = []
+    raw = os.environ.get("VFI_MPV_DEV")
+    if raw:
+        cand.append(Path(raw).expanduser())
+    cand.append(repo_root() / "work" / "mpvdev" / "mpv.exe")
+
+    found = next((p for p in cand if p.exists()), None)
+    _cache["mpvdev"] = found
+    return found
+
+
 def k7sfunc_src() -> Path | None:
     """k7sfunc 包的**可导入目录**（其下应有 ``k7sfunc/__init__.py``）。
 

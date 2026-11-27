@@ -1,10 +1,12 @@
 #include "d3d12_ctx.h"
 
 #include <d3dcompiler.h>
+#include <d3d12sdklayers.h>
 
 #include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <vector>
 
 #include "yuv.h"
 
@@ -13,6 +15,28 @@ namespace {
 
 constexpr DXGI_FORMAT kDepthFormat = DXGI_FORMAT_R32_FLOAT;
 constexpr DXGI_FORMAT kMotionFormat = DXGI_FORMAT_R16G16_FLOAT;
+
+// Debug layer message queue, only set when VDLSSG_DEBUG is on. Drained by drainDebugMessages().
+ComPtr<ID3D12InfoQueue> gDebugQueue;
+bool gYuvOutReported = false;
+
+// Print and clear whatever the debug layer reported. Validation failures show up here instead of
+// silently dropping a dispatch or a copy.
+void drainDebugMessages(const char* where) {
+  if (!gDebugQueue) return;
+  const UINT64 count = gDebugQueue->GetNumStoredMessages();
+  for (UINT64 i = 0; i < count && i < 20; ++i) {
+    SIZE_T len = 0;
+    if (FAILED(gDebugQueue->GetMessage(i, nullptr, &len)) || !len) continue;
+    std::vector<char> buf(len);
+    auto* msg = reinterpret_cast<D3D12_MESSAGE*>(buf.data());
+    if (FAILED(gDebugQueue->GetMessage(i, msg, &len))) continue;
+    std::fprintf(stderr, "[vdlssg] dbg %s: sev=%d id=%d %s\n", where,
+                 static_cast<int>(msg->Severity), static_cast<int>(msg->ID),
+                 msg->pDescription ? msg->pDescription : "");
+  }
+  gDebugQueue->ClearStoredMessages();
+}
 
 // RGBA16F -> planar 4:2:0, packed into uints. Two luma samples share one uint; one chroma sample
 // packs U in the low half and V in the high half. The values are already quantized on the GPU, so
@@ -182,6 +206,63 @@ void main(uint3 id : SV_DispatchThreadID) {
 }
 )";
 
+// RGBA16F -> the two planes of an 8- or 10-bit 4:2:0 output. The filter uses this instead of the
+// video processor for BT.2020: the GPU here encodes P2020 YCbCr without the studio range and shifts
+// neutral chroma, so the engine writes the finished planes and the filter copies them into the
+// frame. Two local single-plane textures are written and then copied into plane 0/1, because D3D12
+// does not allow a UAV on NV12/P010 resources.
+//   b0: geometry, matrix coefficients and the output quantisation (setSharedColor fills them).
+//   u0: luma plane in [0,1] UNORM; u1: chroma plane, x = Cb, y = Cr.
+// P010 keeps its 10-bit code in the high bits of the 16-bit sample, so a code of 0..1023 must be
+// scaled by 64/65535 to land where the video processor expects it. The constant order matches
+// ShareParams: the quantisation comes before the matrix coefficients.
+const char* kRgbToYuv420Shader = R"(
+cbuffer Params : register(b0) {
+  uint W, H, CW, CH;
+  float lumaOffset, lumaScale, chromaOffset, chromaScale;
+  float kr, kg, kb, maxValue;
+};
+
+Texture2D<float4> Src : register(t0);
+RWTexture2D<float> DstY : register(u0);
+RWTexture2D<float2> DstUV : register(u1);
+
+float encode(float v) {
+  const float code = clamp(floor(v + 0.5), 0.0, maxValue);
+  // 10-bit formats store the code in the top ten bits of a UNORM16 sample.
+  return code * (maxValue > 255.0 ? (64.0 / 65535.0) : (1.0 / 255.0));
+}
+
+[numthreads(8, 8, 1)]
+void main(uint3 id : SV_DispatchThreadID) {
+  if (id.x >= CW || id.y >= CH) return;
+  const int x0 = int(id.x) * 2;
+  const int y0 = int(id.y) * 2;
+  const int x1 = min(x0 + 1, int(W) - 1);
+  const int y1 = min(y0 + 1, int(H) - 1);
+  const float3 c00 = Src.Load(int3(x0, y0, 0)).rgb;
+  const float3 c10 = Src.Load(int3(x1, y0, 0)).rgb;
+  const float3 c01 = Src.Load(int3(x0, y1, 0)).rgb;
+  const float3 c11 = Src.Load(int3(x1, y1, 0)).rgb;
+
+  const float3 block[4] = {c00, c10, c01, c11};
+  const int px[4] = {x0, x1, x0, x1};
+  const int py[4] = {y0, y0, y1, y1};
+  [unroll] for (int i = 0; i < 4; ++i) {
+    const float Y = kr * block[i].r + kg * block[i].g + kb * block[i].b;
+    DstY[int2(px[i], py[i])] = encode(lumaOffset + saturate(Y) * lumaScale);
+  }
+
+  // Average the block before converting so a flat 2x2 block stays exactly neutral.
+  const float3 avg = saturate((c00 + c10 + c01 + c11) * 0.25);
+  const float Y = kr * avg.r + kg * avg.g + kb * avg.b;
+  const float cb = (avg.b - Y) / (2.0 * (1.0 - kb));
+  const float cr = (avg.r - Y) / (2.0 * (1.0 - kr));
+  DstUV[id.xy] = float2(encode(chromaOffset + cb * chromaScale),
+                        encode(chromaOffset + cr * chromaScale));
+}
+)";
+
 // Luma plane -> NVOF's GRAYSCALE8 input. The shared P010/NV12 texture is sampled as R16/R8
 // UNORM; NVOF wants 0..255 code values, so expand the normalized sample by 255.
 const char* kLumaShader = R"(
@@ -290,10 +371,28 @@ bool Gpu::init(IDXGIAdapter1* adapter, uint32_t width, uint32_t height, uint32_t
 }
 
 bool Gpu::createDevice(IDXGIAdapter1* adapter, std::string& error) {
+  // Opt-in validation layer: VDLSSG_DEBUG=1 turns on the D3D12 debug layer so validation errors
+  // (invalid subresources, states, descriptor tables) are reported on stderr instead of silently
+  // producing an empty frame.
+  ComPtr<ID3D12Debug> debug;
+  if (std::getenv("VDLSSG_DEBUG")) {
+    const HRESULT dhr = D3D12GetDebugInterface(IID_PPV_ARGS(&debug));
+    if (SUCCEEDED(dhr)) {
+      debug->EnableDebugLayer();
+      std::fprintf(stderr, "[vdlssg] debug layer enabled\n");
+    } else {
+      std::fprintf(stderr, "[vdlssg] debug layer unavailable 0x%08lx\n",
+                   static_cast<unsigned long>(dhr));
+    }
+  }
   const HRESULT r = D3D12CreateDevice(adapter, D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device_));
   if (FAILED(r)) {
     error = hr("D3D12CreateDevice", r);
     return false;
+  }
+  if (debug) {
+    device_.As(&gDebugQueue);
+    if (gDebugQueue) gDebugQueue->SetMuteDebugOutput(FALSE);
   }
   return true;
 }
@@ -676,7 +775,50 @@ bool Gpu::enableSharedTextures(const fg::ColorFormat& format, std::string& error
     return false;
   }
 
-  auto makePso = [&](const char* source, const char* label, ComPtr<ID3D12PipelineState>& pso) {
+  // YCbCr out: one SRV (the RGBA16F frame) and two UAVs (the luma and chroma planes), then the
+  // same twelve constants the RGB path uses.
+  D3D12_DESCRIPTOR_RANGE yuvRanges[2]{};
+  yuvRanges[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+  yuvRanges[0].NumDescriptors = 1;
+  yuvRanges[0].BaseShaderRegister = 0;
+  yuvRanges[1].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+  yuvRanges[1].NumDescriptors = 2;
+  yuvRanges[1].BaseShaderRegister = 0;
+
+  D3D12_ROOT_PARAMETER yuvParams[3]{};
+  yuvParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+  yuvParams[0].DescriptorTable.NumDescriptorRanges = 1;
+  yuvParams[0].DescriptorTable.pDescriptorRanges = &yuvRanges[0];
+  yuvParams[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+  yuvParams[1].DescriptorTable.NumDescriptorRanges = 1;
+  yuvParams[1].DescriptorTable.pDescriptorRanges = &yuvRanges[1];
+  yuvParams[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+  yuvParams[2].Constants.ShaderRegister = 0;
+  yuvParams[2].Constants.Num32BitValues = 12;
+
+  D3D12_ROOT_SIGNATURE_DESC yuvRd{};
+  yuvRd.NumParameters = 3;
+  yuvRd.pParameters = yuvParams;
+  yuvRd.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
+  {
+    ComPtr<ID3DBlob> yuvSig, yuvErr;
+    const HRESULT yr = D3D12SerializeRootSignature(&yuvRd, D3D_ROOT_SIGNATURE_VERSION_1, &yuvSig,
+                                                   &yuvErr);
+    if (FAILED(yr)) {
+      error = hr("D3D12SerializeRootSignature (shared yuv)", yr);
+      return false;
+    }
+    const HRESULT cr = device_->CreateRootSignature(0, yuvSig->GetBufferPointer(),
+                                                    yuvSig->GetBufferSize(),
+                                                    IID_PPV_ARGS(&shareYuvRoot_));
+    if (FAILED(cr)) {
+      error = hr("CreateRootSignature (shared yuv)", cr);
+      return false;
+    }
+  }
+
+  auto makePso = [&](const char* source, const char* label, ComPtr<ID3D12PipelineState>& pso,
+                     ID3D12RootSignature* root) {
     ComPtr<ID3DBlob> code, compileErr;
     HRESULT cr = D3DCompile(source, strlen(source), label, nullptr, nullptr, "main", "cs_5_0",
                             D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &code, &compileErr);
@@ -686,7 +828,7 @@ bool Gpu::enableSharedTextures(const fg::ColorFormat& format, std::string& error
       return false;
     }
     D3D12_COMPUTE_PIPELINE_STATE_DESC pd{};
-    pd.pRootSignature = shareRoot_.Get();
+    pd.pRootSignature = root;
     pd.CS = {code->GetBufferPointer(), code->GetBufferSize()};
     HRESULT pr = device_->CreateComputePipelineState(&pd, IID_PPV_ARGS(&pso));
     if (FAILED(pr)) {
@@ -695,9 +837,11 @@ bool Gpu::enableSharedTextures(const fg::ColorFormat& format, std::string& error
     }
     return true;
   };
-  if (!makePso(kYuvToRgbShader, "kYuvToRgbShader", shareInPso_)) return false;
-  if (!makePso(kRgbToSharedShader, "kRgbToSharedShader", shareOutPso_)) return false;
-  if (!makePso(kLumaShader, "kLumaShader", shareLumaPso_)) return false;
+  if (!makePso(kYuvToRgbShader, "kYuvToRgbShader", shareInPso_, shareRoot_.Get())) return false;
+  if (!makePso(kRgbToSharedShader, "kRgbToSharedShader", shareOutPso_, shareRoot_.Get())) return false;
+  if (!makePso(kLumaShader, "kLumaShader", shareLumaPso_, shareRoot_.Get())) return false;
+  if (!makePso(kRgbToYuv420Shader, "kRgbToYuv420Shader", shareOutYuvPso_, shareYuvRoot_.Get()))
+    return false;
 
   D3D12_DESCRIPTOR_HEAP_DESC hd{};
   hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
@@ -774,8 +918,12 @@ bool Gpu::openSharedOutput(void* handle, std::string& error) {
   shareOut_ = res;
   shareOutState_ = D3D12_RESOURCE_STATE_COMMON;
   const D3D12_RESOURCE_DESC desc = res->GetDesc();
-  std::fprintf(stderr, "[vdlssg] openSharedOutput handle=%p res=%p flags=0x%x\n",
-               handle, static_cast<void*>(res.Get()), static_cast<unsigned>(desc.Flags));
+  shareOutIsYuv_ =
+      desc.Format == DXGI_FORMAT_NV12 || desc.Format == DXGI_FORMAT_P010 ||
+      desc.Format == DXGI_FORMAT_NV11;
+  std::fprintf(stderr, "[vdlssg] openSharedOutput handle=%p res=%p flags=0x%x format=%u\n",
+               handle, static_cast<void*>(res.Get()), static_cast<unsigned>(desc.Flags),
+               static_cast<unsigned>(desc.Format));
   return true;
 }
 
@@ -829,6 +977,145 @@ void Gpu::recordConvertInput(int slot) {
 
 void Gpu::recordConvertOutput() {
   if (!shareOutPso_ || !shareOut_) return;
+  // YCbCr out: write the finished planes ourselves and copy them into the shared frame. The video
+  // processor is not used at all here, so the filter's copy of the frame is all that is left.
+  if (shareOutIsYuv_) {
+    const bool tenBit = shareBits_ == 10;
+    const uint32_t cw = (width_ + 1) / 2;
+    const uint32_t ch = (height_ + 1) / 2;
+    bool stale = !yuvOutY_ || !yuvOutUV_;
+    if (!stale) {
+      const D3D12_RESOURCE_DESC d = yuvOutY_->GetDesc();
+      stale = d.Width != width_ || d.Height != height_;
+    }
+    if (stale) {
+      yuvOutY_.Reset();
+      yuvOutUV_.Reset();
+      yuvOutYState_ = D3D12_RESOURCE_STATE_COMMON;
+      yuvOutUVState_ = D3D12_RESOURCE_STATE_COMMON;
+      const auto make = [&](uint32_t w, uint32_t h, DXGI_FORMAT fmt,
+                            ComPtr<ID3D12Resource>& out) {
+        D3D12_RESOURCE_DESC d{};
+        d.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        d.Width = w;
+        d.Height = h;
+        d.DepthOrArraySize = 1;
+        d.MipLevels = 1;
+        d.Format = fmt;
+        d.SampleDesc.Count = 1;
+        d.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+        const auto hp = heapProps(D3D12_HEAP_TYPE_DEFAULT);
+        return device_->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &d,
+                                                D3D12_RESOURCE_STATE_COMMON, nullptr,
+                                                IID_PPV_ARGS(&out));
+      };
+      HRESULT yr = make(width_, height_,
+                        tenBit ? DXGI_FORMAT_R16_UNORM : DXGI_FORMAT_R8_UNORM, yuvOutY_);
+      HRESULT ur = yr;
+      if (SUCCEEDED(yr)) {
+        ur = make(cw, ch, tenBit ? DXGI_FORMAT_R16G16_UNORM : DXGI_FORMAT_R8G8_UNORM,
+                  yuvOutUV_);
+      }
+      if (FAILED(yr) || FAILED(ur)) {
+        std::fprintf(stderr, "[vdlssg] yuv plane create failed 0x%08lx\n",
+                     static_cast<unsigned long>(FAILED(yr) ? yr : ur));
+        return;
+      }
+    }
+
+    transition(output_.Get(), outputState_, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    transition(yuvOutY_.Get(), yuvOutYState_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    transition(yuvOutUV_.Get(), yuvOutUVState_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+
+    ID3D12DescriptorHeap* heaps[] = {shareHeap_.Get()};
+    list_->SetDescriptorHeaps(1, heaps);
+    list_->SetComputeRootSignature(shareYuvRoot_.Get());
+    list_->SetPipelineState(shareOutYuvPso_.Get());
+
+    const UINT inc =
+        device_->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    D3D12_CPU_DESCRIPTOR_HANDLE h = shareHeap_->GetCPUDescriptorHandleForHeapStart();
+    D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
+    sd.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+    sd.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    sd.Texture2D.MipLevels = 1;
+    device_->CreateShaderResourceView(output_.Get(), &sd, h);
+    h.ptr += inc;
+    D3D12_UNORDERED_ACCESS_VIEW_DESC ud{};
+    ud.Format = tenBit ? DXGI_FORMAT_R16_UNORM : DXGI_FORMAT_R8_UNORM;
+    ud.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+    ud.Texture2D.MipSlice = 0;
+    device_->CreateUnorderedAccessView(yuvOutY_.Get(), nullptr, &ud, h);
+    h.ptr += inc;
+    ud.Format = tenBit ? DXGI_FORMAT_R16G16_UNORM : DXGI_FORMAT_R8G8_UNORM;
+    device_->CreateUnorderedAccessView(yuvOutUV_.Get(), nullptr, &ud, h);
+
+    D3D12_GPU_DESCRIPTOR_HANDLE g = shareHeap_->GetGPUDescriptorHandleForHeapStart();
+    list_->SetComputeRootDescriptorTable(0, g);
+    g.ptr += inc;
+    list_->SetComputeRootDescriptorTable(1, g);
+    list_->SetComputeRoot32BitConstants(2, 12, &shareParams_, 0);
+    list_->Dispatch((cw + 7) / 8, (ch + 7) / 8, 1);
+
+    D3D12_RESOURCE_BARRIER uav[2]{};
+    uav[0].Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+    uav[0].UAV.pResource = yuvOutY_.Get();
+    uav[1].Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+    uav[1].UAV.pResource = yuvOutUV_.Get();
+    list_->ResourceBarrier(2, uav);
+
+    if (std::getenv("VDLSSG_YUV_CLEAR")) {
+      // Probe: fill both planes with a constant instead of the shader result, to tell a broken
+      // compute pass apart from a broken copy into the shared frame.
+      D3D12_CPU_DESCRIPTOR_HANDLE cy = shareHeap_->GetCPUDescriptorHandleForHeapStart();
+      cy.ptr += inc;
+      D3D12_CPU_DESCRIPTOR_HANDLE cuv = cy;
+      cuv.ptr += inc;
+      D3D12_GPU_DESCRIPTOR_HANDLE gy = shareHeap_->GetGPUDescriptorHandleForHeapStart();
+      gy.ptr += inc;
+      D3D12_GPU_DESCRIPTOR_HANDLE guv = gy;
+      guv.ptr += inc;
+      const float fill[4] = {0.5f, 0.5f, 0.5f, 0.5f};
+      list_->ClearUnorderedAccessViewFloat(gy, cy, yuvOutY_.Get(), fill, 0, nullptr);
+      list_->ClearUnorderedAccessViewFloat(guv, cuv, yuvOutUV_.Get(), fill, 0, nullptr);
+    }
+
+    transition(yuvOutY_.Get(), yuvOutYState_, D3D12_RESOURCE_STATE_COPY_SOURCE);
+    transition(yuvOutUV_.Get(), yuvOutUVState_, D3D12_RESOURCE_STATE_COPY_SOURCE);
+    transition(shareOut_.Get(), shareOutState_, D3D12_RESOURCE_STATE_COPY_DEST);
+
+    // Subresource index 1 is plane 1: the luma and chroma planes of NV12/P010 are separate
+    // subresources, so each copy targets its own index.
+    D3D12_TEXTURE_COPY_LOCATION src{};
+    src.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+    D3D12_TEXTURE_COPY_LOCATION dst{};
+    dst.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+    dst.pResource = shareOut_.Get();
+    src.pResource = yuvOutY_.Get();
+    src.SubresourceIndex = 0;
+    dst.SubresourceIndex = 0;
+    list_->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+    src.pResource = yuvOutUV_.Get();
+    dst.SubresourceIndex = 1;
+    list_->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+
+    transition(shareOut_.Get(), shareOutState_, D3D12_RESOURCE_STATE_COMMON);
+    transition(yuvOutY_.Get(), yuvOutYState_, D3D12_RESOURCE_STATE_COMMON);
+    transition(yuvOutUV_.Get(), yuvOutUVState_, D3D12_RESOURCE_STATE_COMMON);
+    if (!gYuvOutReported) {
+      gYuvOutReported = true;
+      std::fprintf(stderr,
+                   "[vdlssg] yuv out %ux%u chroma %ux%u tenBit=%d maxValue=%.1f "
+                   "luma=(%.1f+%.1f) chroma=(%.1f+%.1f)\n",
+                   width_, height_, cw, ch, tenBit ? 1 : 0, shareParams_.maxValue,
+                   shareParams_.lumaOffset, shareParams_.lumaScale,
+                   shareParams_.chromaOffset, shareParams_.chromaScale);
+    }
+    drainDebugMessages("convertOutput");
+    mark(3);
+    return;
+  }
   // 实验：把转换结果先写进本地纹理，再整体 CopyResource 到共享纹理，
   // 用来验证"共享纹理上直接开 UAV 做 dispatch"是否是那 5ms 的根因。
   const bool useLocal = std::getenv("VDLSSG_CONV_LOCAL") != nullptr;
