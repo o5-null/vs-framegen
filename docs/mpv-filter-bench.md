@@ -20,17 +20,19 @@
    （缓存在 `%TEMP%\mpv-filter-bench\bench-src.mp4`，删掉即重新生成）。也可以把视频拖进窗口、
    粘贴路径，或事先改名成 `installer\bench-clip.mkv|mp4`（有它就不再问）。
 2. 问分辨率：`1080p` / `2k` / `4k`，可以写多个（空格或逗号分隔）；**直接回车 = 三个全测**。
-3. 问倍数 `multi`（2–6）；**直接回车 = 2**。VFG 每个内插点占一条 CUDA lane，4K + 高倍数在
-   10 GB 卡上会预检失败并整段跳过。
-4. 预检：三条路径各用 40 帧试跑一次，确认滤镜真的初始化了（失败的路径整段跳过并警告）。
-5. 每个分辨率依次跑 `VS-DLSSG` / `VS-VFG` / `NATIVE`，最后打印汇总表并写入
+3. 问倍数 `multi`（2–6）：可以只写一个（`4`），也可以写多个，**直接回车 = 2 3 4 5 6 全扫**。
+   扫全的好处是直接看出这台机器在哪个分辨率能撑住几倍；撑不住的组合不会中断整轮，而是留一行
+   全 `-`。VFG 每个内插点占一条 CUDA lane，4K + 高倍数在 10 GB 卡上通常就是这种情况。
+4. 预检：三条路径各用最小倍数试跑 40 帧，确认滤镜真的初始化了（失败的路径整条车道跳过并警告）。
+5. 每个分辨率 × 每个倍数依次跑 `VS-DLSSG` / `VS-VFG` / `NATIVE`，最后打印汇总表并写入
    `installer\mpv-FilterBench-result.tsv`（`tag / WxH / multi / frames / elapsed_s / out_fps / src_fps / note`）。
+   `src_fps` 后面带 `+` 表示这个组合够实时（能跟上片源帧率），带 `-` 表示不够；`out_fps` 是实际呈现帧率。
 6. 再把系统/显卡/驱动/播放器版本和这轮结果整理成 `installer\report.txt`，可以直接发给别人。
 
 免交互（批处理/自己脚本里调用）：
 
 ```bat
-installer\mpv-FilterBench.bat "E:\视频\clip.mkv" "1080p 4k" 2
+installer\mpv-FilterBench.bat "E:\视频\clip.mkv" "1080p 4k" "2 4 6"
 ```
 
 ## 口径
