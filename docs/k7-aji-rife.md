@@ -78,6 +78,18 @@ core.rife_aji.Rife(clip, conf, rife_model_dir, factor=2, device=0,
 - 输出帧数：`(源帧数-1) * factor + 1`（30 帧 2 倍 = 59 帧）。
 - 实例内部一把锁串行：VS 并行取帧不会撞同一个 CUcontext。
 
+同一个插件还注册了超分滤镜（k7 侧暂无封装）：
+
+```python
+core.rife_aji.Upscale(clip, conf, model_dir="", device=0, matrix=-1, range=-1,
+                      lib="", fps=25.0, backend="")
+```
+
+conf 换成带超分链的模板（`chain_1_model_1_name` = ONNX 文件名，不含 `.onnx`），输出尺寸取链
+自报的 `w×h`。SPAN/SPANF3/Compact 有 CUDA 原生内核（RTX 3080 实测 720p Balanced 26.3 ms/帧、
+Performance 10.8 ms/帧；1080p Balanced 57.2 ms/帧），整帧模型仍需能建 engine 的 TensorRT。
+模型来源与打包方式见 vsaji 的 `README.md`「超分（Upscale）」。
+
 ## 4. conf 模板（k7 自动生成）
 
 ```ini
@@ -115,7 +127,7 @@ chain_1_rife_model=<code>
 - 每帧一次主机↔设备拷贝：VS 帧在系统内存，拿不到解码器的 GPU 帧句柄；mpv 内置滤镜的零拷贝
   路径这里做不到。1080p 一次往返约 9 MB，相对推理可忽略。
 - 只支持 4:2:0 8/10bit；其他格式先转。
-- 只吃 RIFE-only conf（带超分链的会被拒绝）。
+- `Rife` 只吃 RIFE-only conf；带超分链的 conf 请改用同插件的 `Upscale`（k7 暂无封装）。
 - `aji_trt.dll` 仍链接 nvinfer（CUDA 原生内核与 TensorRT 后端在**同一个** DLL 里），TensorRT
   运行时必须在 `trt\` 里（`aji-runtime.json` 指路，别手写 PATH）；缺 `nvinfer_11.dll` 时整个
   后端加载失败（error 126），即使 conf 只走原生内核。`Version()["missing"]` 会提前指出。
