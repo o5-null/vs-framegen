@@ -26,36 +26,36 @@
 
 ```
 rife_aji.dll         VS 插件（本仓库写的胶水，MIT）
-aji.dll              libaji dispatcher（源码构建）
-aji_trt.dll          后端：CUDA 原生 RIFE 内核 + TensorRT 引擎路径（源码构建）
-aji_trtrtx.dll       可选：TensorRT-RTX 后端（同样含原生内核；-WithTensorRTRTX）
+aji.dll              libaji dispatcher（上游 release v0.33.0）
+aji_trt.dll          后端：CUDA 原生 RIFE 内核 + TensorRT 引擎路径（上游）
+aji_dml.dll / aji_vk.dll  DirectML / Vulkan 后端（上游，随包但本宿主用不了）
+aji_trtrtx.dll       TensorRT-RTX 后端（同样含原生内核；上游，默认随包）
 cudart64_13.dll      CUDA 运行时
-aji-runtime.json     {"format":1,"trt":"trt"}（带 RTX 时另有 trtrtx 键）
+aji-runtime.json     {"format":1,"trt":"trt","trtrtx":"trtrtx"}
 trt\                 nvinfer_11.dll 等（NVIDIA 公开包，含 cudart 副本）
-trtrtx\              可选：TensorRT-RTX 运行库（约 230 MB）
+trtrtx\              TensorRT-RTX 运行库（约 230 MB）
 conf\                k7 按模型生成的 rife_only_<code>.conf
 rife\                rife_v4.*.onnx
 ```
 
 要点：
 
-- 插件只声明/使用 `include/aji.h` 的 C ABI，**不复制、不改写引擎代码**；头文件在构建期从钉住
-  的引擎 commit 导出（只把 `AJI_EXPORT` 的 dllexport 去掉）。
+- 插件只声明/使用 `include/aji.h` 的 C ABI，**不复制、不改写引擎代码**；后端 DLL 直接取上游
+  release（sha256 钉死），头文件从同一 commit 导出（只把 `AJI_EXPORT` 的 dllexport 去掉）。
+  目录搜索、`aji-runtime.json` 预载、后端加载全部由 libaji 自己做。
 - RIFE-only conf 下 `aji_configure` 返回 0；引擎默认走 `ajinative`（ONNX 直读 + CUDA 内核），
   **不建 TensorRT 引擎、不调 trtexec**，所以启动快。
 - 运行时包校验要求 `trt\` 内有 cudart，只放在 `aji.dll` 旁边会拒绝启动。
 - 扁平布局是为了 k7：`Version()` 同时报插件目录与它探测到的 `aji` 目录（同级 `aji.dll` 或
   下级 `aji\`），k7 优先按这个自报路径找 conf/模型，再退回 `vs-plugins\aji`。
-- 插件自己探测后端（`Version()["backends"]`/`["missing"]`）：只查文件（顺序同 k7：`lib` →
-  `AJI_DIR` → 插件同层/`aji\` → 上级 `vs-plugins\aji`），按 libaji 预载的 DLL 判断能否启动。
-  但 DirectML/Vulkan 永远不会入选：DirectML 要 `ID3D11Device` + 共享 D3D11 纹理
-  （`aji_dml.cpp:2028`），Vulkan 要 `aji_create_vk` 的 `aji_vk_image` 帧（`aji_vk_frames.cpp:24`），
-  本插件只有主机帧 + CUDA context；文件齐全时 `missing` 会说明宿主帧类型不支持。
-- TensorRT-RTX 后端是可选项（`pack.ps1 -WithTensorRTRTX`）：`aji_trtrtx.dll` 与 `aji_trt.dll`
-  一样把 `aji_native` 编进同一个 DLL，只是链接 RTX 运行库；运行库（`tensorrt_rtx_*.dll` + parser，
-  约 230 MB）放 `trtrtx\`，由 `aji-runtime.json` 的 `trtrtx` 键预载。默认包不带它；conf 写
-  `TensorRT-RTX` 时才走这条链，加载失败 dispatcher 会回落 `aji_trt`。
-  conf 的后端不可用时 `Rife()` 自动换后端并写临时 conf，`backend=` 可强制或限定 `conf`。
+- 插件在 `Version()["backends"]`/`["missing"]` 里报告**后端 DLL 的组成**（只查文件，不加载），
+  但不再自己选后端：`backend=""`（auto）按 `trt+native=1` → `TensorRT-RTX` → `trt+native=0`
+  的梯队决定，必要时写临时 conf；DirectML/Vulkan 永远不会入选——DirectML 要 `ID3D11Device` +
+  共享 D3D11 纹理（`aji_dml.cpp:2028`），Vulkan 要 `aji_create_vk` 的 `aji_vk_image` 帧
+  （`aji_vk_frames.cpp:24`），本插件只有主机帧 + CUDA context。
+- TensorRT-RTX 后端默认随包（`aji_trtrtx.dll` + `trtrtx\` 运行库，约 230 MB）：conf 写
+  `TensorRT-RTX` 或用 `backend="TensorRT-RTX"` 时才走这条链，加载失败 dispatcher 会回落 `aji_trt`。
+  `backend=` 可强制后端、强制 CUDA 原生（`native`）或限定 `conf`。
 
 ## 3. 插件接口
 
@@ -69,9 +69,9 @@ core.rife_aji.Rife(clip, conf, rife_model_dir, factor=2, device=0,
 | `conf` / `rife_model_dir` | RIFE-only conf 与 `rife_v4.*.onnx` 所在目录 |
 | `factor` | 2..16；时间轴 `src = n / factor`、`t = (n % factor) / factor` |
 | `scene_prop` | 1 = 读 `_SceneChangeNext` 传 scene 0/1；0 = 交 libaji 内建检测（-1） |
-| `lib` | `aji.dll` 路径；空则按 k7 顺序探测（`AJI_DIR`、插件同层/`aji\`、上级 `vs-plugins\aji`、PATH） |
+| `lib` | `aji.dll` 路径；空则用插件同目录的 `aji.dll`（不再做目录搜索，那是 libaji 的事） |
 | `fps` | 只喂 conf 的 `chain_1_max_fps` 判定（必须大于源 fps） |
-| `backend` | `""`/`auto` = conf 可用就用、否则按 TensorRT→RTX 回退（DirectML/Vulkan 不可用）；`conf` = 严格按 conf；也可写后端名。换后端时写临时 conf |
+| `backend` | `""`/`auto` = 梯队 `trt+native=1` → `TensorRT-RTX` → `trt+native=0`；`conf` = 严格按 conf；`native`/`cuda` = `TensorRT` + 强制原生；也可写后端名。需要换后端时写临时 conf |
 
 - 帧：`phase == 0` 或尾部直接 `copyFrame(a)`；`AJI_SCENE` 时同样输出 `a`。
 - 格式：4:2:0 的 8bit（NV12）或 10bit（P010）；10bit 在收发时做 LSB↔MSB 位移。

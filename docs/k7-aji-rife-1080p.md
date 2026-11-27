@@ -155,17 +155,18 @@ aji 还有一个自带的 **TensorRT-RTX** 后端（`vsaji/dist/aji-rtx/`：`aji
 ### 7.1 默认路径：TRT-RTX 包 + k7 原样调用 = 还是 native
 
 k7 的 `RIFE_AJI` 把 conf 写死 `backend=TensorRT`（`k7sfunc/src/k7sfunc/mod_memc.py:1238`），
-在只放了 `aji_trtrtx.dll`（删掉 `aji_trt.dll`）的包上，插件先探测再回退：
+在只放了 `aji_trtrtx.dll`（删掉 `aji_trt.dll`）的包上，插件按自己的 auto 梯队改选后端
+（`vsaji/src/plugin.cpp` 的 `pick_auto()`：`trt+native=1` → `TensorRT-RTX` → `trt+native=0`）。
+aji_trt.dll 不在包里时它直接选 TensorRT-RTX，不打 warning；只有 GPU 低于 compute capability 8.0
+时才会附一条 note，说明原生内核为什么没被选中。
 
-```
-rife_aji: TensorRT is not usable here (aji_trt.dll (not in this pack)); using TensorRT-RTX
-```
-
-`Version()["backend"]` 变成 `TensorRT-RTX`，`missing` 里 TensorRT / DirectML / Vulkan 都缺
-（`vsaji/src/runtime_probe.cpp:201-210` 的 `pick_backend` 回退 + `vsaji/src/plugin.cpp:308-324` 改写临时 conf）。
-但 4.14 跑出来 **11.56 ms**（p10 10.72 / p90 19.05，直通帧 0.08），`rife/` 下没有任何引擎文件，
+`Version()["backend"]` 变成 `TensorRT-RTX`，`missing` 里 TensorRT / DirectML / Vulkan 都缺。
+4.14 跑出来 **11.56 ms**（p10 10.72 / p90 19.05，直通帧 0.08），`rife/` 下没有任何引擎文件，
 输出与 TensorRT 后端的 native 结果**逐像素相同**（psnr_y = ∞）——native CUDA 内核编在每个后端 DLL 里，
 和选哪个后端无关。
+
+> 注：旧的 `runtime_probe.cpp` / `pick_backend` 已在「改用上游 release」的收窄里删除，
+> 现在只剩上述梯队这一处选择逻辑。
 
 ### 7.2 关掉 native 才轮到 trtrtx builder
 
@@ -283,9 +284,12 @@ vs-mlrt 那行的 21.30 是 `trtexec --loadEngine --useCudaGraph --warmUp=2000 -
 | `vsaji/.deps/engine/src/aji_trt.cpp` | 匿名 namespace 里的 `Prof`/`prof_flush`/`PROF_MARK`，RIFE 路径 8 个标记，`aji_destroy` 里兜底 flush |
 
 ```
-powershell -ExecutionPolicy Bypass -File vsaji\scripts\build-engine.ps1 -RtxRoot E:\code\dlssg-vfi\vsaji\.deps\trtrtx
 powershell -ExecutionPolicy Bypass -File vsaji\scripts\build-plugin.ps1 -VsInclude E:\code\dlssg-vfi\.venv\Lib\site-packages\vapoursynth\include
 ```
+
+> 注：本节数据来自当时从源码自建后端的版本；`build-engine.ps1` / `fetch-engine.ps1` /
+> `fetch-trt-rtx.ps1` 已在 2026-11-27 随「后端改用上游 release」退役（现在只需
+> `fetch-aji.ps1` + `build-plugin.ps1` + `pack.ps1`）。`AJI_PROFILE` 插桩在插件侧仍然有效。
 
 产物在 `vsaji/out/engine/`、`vsaji/out/rife_aji.dll`；本轮的 DLL 已复制到 `work/aji-models/`（TensorRT 包）
 与 `work/aji-rtx/`（TRT-RTX 包）。插桩只影响 `AJI_PROFILE=1` 时的输出，**不改变计算结果**——

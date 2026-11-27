@@ -24,7 +24,8 @@
 
 - k7sfunc：K7sfunc 的 fork（o5-null/K7sfunc），PLAYKIT 预设层与 RIFE_AJI 算子在这里；改动 push 后由 mpv-playkit 按 commit 钉版本
 - mpv-playkit：Windows x64 便携 mpv 预览包的构建链（o5-null/mpv-playkit-pre），manifest + sources.lock
-- vsaji：AnimeJaNai (libaji) 的 VapourSynth 插件与构建脚本，产物 dist\aji 供 k7sfunc 的 RIFE_AJI 使用
+- vsaji：AnimeJaNai (libaji) 的 VapourSynth 插件，产物 dist\aji 供 k7sfunc 的 RIFE_AJI 使用；
+  后端二进制取上游 release（`fetch-aji.ps1`），本仓库只构建插件本体，不再编引擎
 - mpv-src：mpv 源码与 msys 构建树（只读参考，`run-mpv-test.sh` 等脚本指向它的 build-msys）
 - ngxsdk：NVIDIA DLSS SDK 的克隆（`vs-dlssg\src\build.bat` 的默认 NGX_SDK）
 - k7sfunc-wiki：wiki 源；k7sfunc-wiki-pages、vs-framegen-wiki-pages 是静态页输出（不是仓库）
@@ -67,7 +68,8 @@ uv pip install --python .venv\Scripts\python.exe vapoursynth==74 numpy vsrepo
   `测试数据\1080p` 的 PNG 转成无损 FFV1（`--source ffv1`），避免把 PNG 解码算进引擎耗时。
 - aji 的分阶段计时桩默认关闭，`AJI_PROFILE=1`（`AJI_PROFILE_EVERY=N`，默认 10 帧）打开，
   stderr 出 `[aji-profile/plugin]`（上传/交织/回传）与 `[aji-profile/trt]`（setup…infer…crop）两行；
-  桩在 `vsaji\src\aji_host.cpp`、`aji_frames.cpp`、`.deps/engine/src/aji_trt.cpp`，改完要重编 engine + 插件。
+  桩在 `vsaji\src\aji_host.cpp`、`aji_frames.cpp`；引擎侧那半在 `.deps/engine/src/aji_trt.cpp`，
+  只有自建后端时才有——现在包用上游 release，`[aji-profile/trt]` 那行不会出现。
 
 ## 测试套件（test\suite）
 
