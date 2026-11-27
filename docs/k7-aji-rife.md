@@ -100,6 +100,11 @@ Performance 10.8 ms/帧；1080p Balanced 57.2 ms/帧），整帧模型仍需能�
 30.2 ms/帧，1080p 38.9 → 189.1 ms/帧（RTX 3080）。只加 `chain_1_temporal_fix_model`、
 不给超分模型的纯时序链也支持（输出尺寸不变）。`Rife` 不接受这类 conf（它没有 `model_dir`）。
 
+非时序链默认开 3 槽预取流水线（`aji_flush/aji_wait` 票据 + 每槽一套设备缓冲），把 CPU 侧的
+打包/上传/回读和 GPU 计算叠起来：720p 6.5 → 5.7 ms/帧、1080p→2160p 45.6 → 33.5 ms/帧
+（RTX 3080，测量时后台有游戏占卡，非干净基线）。输出逐帧哈希与关闭流水线时一致；
+`AJI_PREFETCH=0` 可关掉做对照。时序链不走流水线。k7 侧不需要改动。
+
 ## 4. conf 模板（k7 自动生成）
 
 ```ini
@@ -124,7 +129,7 @@ chain_1_rife_model=<code>
 
 ## 5. k7 侧
 
-- `src/k7sfunc/mod_memc.py:1095-1217` `RIFE_AJI(input, model, ensemble, fps_in, fps_num,
+- `src/k7sfunc/mod_aji.py`（原 `mod_memc.py` 的 AJI 段）`RIFE_AJI(input, model, ensemble, fps_in, fps_num,
   fps_den, sc_mode, gpu, backend="auto")`：`_aji_runtime_dir()` 依次看 `AJI_DIR` →
   `Version()["aji"]` → 插件同级/上级 `aji\` → `<包根>\vs-plugins\aji` → 生成/复用 conf →
   调 `core.vsaji.Rife` → `AssumeFPS(fps_in * factor)`；非整数倍率直接报错。
@@ -143,7 +148,8 @@ chain_1_rife_model=<code>
 ## 6. 限制
 
 - 每帧一次主机↔设备拷贝：VS 帧在系统内存，拿不到解码器的 GPU 帧句柄；mpv 内置滤镜的零拷贝
-  路径这里做不到。1080p 一次往返约 9 MB，相对推理可忽略。
+  路径这里做不到。4K 输出一次往返约 10 ms（回读 + 拆分占大头），预取流水线只能把它和 GPU
+  计算重叠、省不掉拷贝本身。
 - 只支持 4:2:0 8/10bit；其他格式先转。
 - `Rife` 只吃 RIFE-only conf；带超分链或 `chain_1_temporal_fix_model` 的 conf 请改用同插件的
   `Upscale`（k7 封装：`UPSCALE_AJI`）。`Rife` 没有 `model_dir`，链里其它模型找不到文件时
