@@ -85,3 +85,37 @@ def test_playkit_stage(stage):
     assert (stage / "mpv.exe").exists()
     assert (stage / "portable_config").is_dir()
     assert (stage / "Lib" / "site-packages" / "vapoursynth" / "plugins").is_dir()
+
+
+def test_process_memory_sampler(tmp_path):
+    """采样器要能拿到工作集/私有提交，并落成 mem.csv（调试现场靠它判断租约/泄漏）。"""
+    from lib import memory
+
+    alloc = (
+        "import time\n"
+        "b = bytearray(80 * 1024 * 1024)\n"
+        "for i in range(0, len(b), 4096): b[i] = 1\n"
+        "time.sleep(0.9)\n"
+    )
+    res = run([sys.executable, "-c", alloc], timeout=120, interval=0.1)
+    assert res.ok, res.tail()
+    mem = res.memory
+    assert mem.get("peak_wset_mb", 0) >= 60, mem          # 80MB 的块必须体现在工作集里
+    assert mem.get("peak_private_mb", 0) >= 60, mem
+    assert mem.get("samples", 0) >= 3, mem                # 0.9s / 0.1s ≈ 9 次
+    res.save(tmp_path)
+    csv_path = tmp_path / "mem.csv"
+    assert csv_path.exists() and csv_path.stat().st_size > 64
+    assert memory.process_memory(0) is None               # 非法 pid 不能抛异常
+
+
+def test_gpu_memory_source():
+    """显存统计要有来源：Windows 的 GPU 性能计数器，或 nvidia-smi。都没有就 skip。"""
+    from lib import memory
+
+    table = memory.gpu_process_memory()
+    if not table:
+        pytest.skip("没有可用的按进程显存统计（性能计数器被禁用/无 GPU）")
+    pid, mem = next(iter(table.items()))
+    assert isinstance(pid, int) and pid > 0
+    assert mem["dedicated"] >= 0 and mem["shared"] >= 0

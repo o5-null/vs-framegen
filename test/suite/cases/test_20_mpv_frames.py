@@ -80,3 +80,48 @@ def test_identity_vapoursynth_matches_plain(case):
     assert a.shape == b.shape
     worst = int(np.abs(a - b).max())
     assert worst <= 1, f"identity 路径最大偏差 {worst}，说明多过一次色彩转换或其他处理"
+
+
+@pytest.mark.gpu
+def test_vs_side_vram_series(case):
+    """VS 脚本自己采显存：mpv 链路里也能拿到整卡占用序列。
+
+    与 ``test_gpu_memory_is_sampled`` 互补：那条走 OS 性能计数器（只覆盖持有
+    GPU 分配的进程），这条走脚本内的 NVML 整卡采样，对短命进程也有效。
+    """
+    video = _media()
+    r = case.run("vram")
+    r.vpy(IDENTITY)
+    m = r.mpv(video, frames=90, scale=(320, 180), env={"VFI_VRAM_INTERVAL": "0.05"})
+    assert m.result.ok, m.result.tail()
+    assert not m.fatal(), m.fatal()
+
+    series = r.vram()
+    if not series:
+        pytest.skip("VS 侧没有采到显存（检查 nvml.dll / VFI_VRAM）")
+    assert series["samples"] >= 2, series
+    assert series["peak_mb"] > 0, series
+    assert series["delta_mb"] >= 0, series
+    assert m.vram.get("peak_mb") == series["peak_mb"], "mpv 产物里应带上同一份显存摘要"
+
+
+@pytest.mark.gpu
+def test_gpu_memory_is_sampled(case):
+    """显存采样走通一次真实 GPU 输出：``--vo=gpu`` 必须能读到 dedicated 用量。
+
+    性能计数器只在进程真的持有 GPU 分配时才列该 pid，所以这里用真 GPU 输出而
+    不是 vo=image（后者纯 CPU，显存恒为 0）。取不到就 skip：显卡驱动/WDDM 版本
+    不同，计数器可能不暴露 CUDA/D3D 分配。
+    """
+    video = _media()
+    r = case.run("gpu")
+    m = r.mpv(video, frames=60, scale=(640, 360), vo="gpu", gpu=True)
+    require(m.result.ok, f"vo=gpu 跑不起来（{m.result.rc}）：{m.result.tail()}")
+
+    mem = m.memory
+    require(mem, "没有采集到内存数据（检查 VFI_MEM）")
+    peak = mem.get("peak_gpu_dedicated_mb")
+    if peak is None:
+        pytest.skip("该机器的性能计数器没有报告本进程的显存占用")
+    assert peak > 0, mem
+    assert mem["peak_wset_mb"] > 0, mem

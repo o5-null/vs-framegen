@@ -66,13 +66,26 @@ def test_frame_gen_writes_duration_props(case):
     _needs_engine()
     r = case.run("fg-props")
     r.vpy(BODY, props=True)
-    _check_or_skip(r.vspipe(end=3))
+    _check_or_skip(r.vspipe(end=3, gpu=True))
 
     props = r.props()
     require(props, "没有解析到帧属性（检查 dump_props 与 vspipe -j）")
     assert len(props) == 4, f"end=3 应拿到 4 帧属性，实测 {len(props)}"
     for row in props:
         assert (row["_DurationNum"], row["_DurationDen"]) == (1, 48), row
+
+    # 引擎帧生成是显存大户：产物里应该留下占用曲线（本机取不到时留空）
+    meta = r.meta()
+    mem = meta.get("memory") or {}
+    require(mem, "没有采集到内存数据（检查 VFI_MEM）")
+    assert mem["peak_wset_mb"] > 0, mem
+
+    vram = meta.get("vram") or {}
+    if not vram:
+        pytest.skip("VS 侧没有采到显存（检查 nvml.dll / VFI_VRAM）")
+    assert vram["peak_mb"] > 0, vram
+    assert vram["delta_mb"] >= 0, vram
+    assert vram["samples"] >= 2, vram
 
 
 def test_frame_gen_survives_mpv_chain(case):

@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .runner import Result, run
+from . import vpy
 
 #: 出现即代表被测链路没有真正生效（VS 脚本失败会被 mpv 静默禁用）
 FATAL_PATTERNS = (
@@ -100,6 +101,16 @@ class MpvRun:
     def saved_frames(self) -> list[str]:
         return [ln.split("Saving ", 1)[1].strip() for ln in self.log_lines if "Saving " in ln]
 
+    @property
+    def memory(self) -> dict:
+        """峰值内存/显存（MB），来自 lib/memory.py 的采样。"""
+        return self.result.memory
+
+    @property
+    def vram(self) -> dict:
+        """VS 脚本内 NVML 采到的整卡显存摘要（基线/峰值/增量）。"""
+        return self.extra.get("vram") or self.result.extra.get("vram") or {}
+
     # ---- 帧视图 ----
     def frame_files(self) -> list[Path]:
         from .frames import list_frames
@@ -130,8 +141,10 @@ def run_mpv(
     scale: tuple[int, int] | str | None = None,
     extra: list[str] | None = None,
     config: bool = False,
+    vo: str = "image",
     timeout: float = 300.0,
     env: dict[str, str] | None = None,
+    gpu: bool | None = None,
     log_level: str = "all=info,vo/image=v,vapoursynth=debug,vf=debug",
 ) -> MpvRun:
     """跑一次 mpv 并把帧写到 ``cwd/frames``。
@@ -153,10 +166,7 @@ def run_mpv(
         str(exe),
         Path(source).as_posix() if isinstance(source, Path) else str(source),
         "--terminal=no",
-        "--vo=image",
-        "--vo-image-outdir=frames",
-        "--vo-image-format=png",
-        "--vo-image-png-compression=0",
+        f"--vo={vo}",
         f"--frames={frames}",
         "--ao=null",
         "--no-audio",
@@ -168,6 +178,15 @@ def run_mpv(
         "--log-file=mpv.log",
         f"--msg-level={log_level}",
     ]
+    if vo == "image":
+        argv += [
+            "--vo-image-outdir=frames",
+            "--vo-image-format=png",
+            "--vo-image-png-compression=0",
+        ]
+    else:
+        # 真 GPU 输出：不要抢焦点，也不要弹窗等交互
+        argv += ["--window-minimized=yes"]
     if start is not None:
         argv.append(f"--start={start}")
     if end is not None:
@@ -179,13 +198,18 @@ def run_mpv(
         argv.append("--load-scripts=no")
     argv.extend(extra or [])
 
-    result = run(argv, cwd=cwd, env=env, timeout=timeout)
+    result = run(argv, cwd=cwd, env=env, timeout=timeout, gpu=gpu)
     log_path = cwd / "mpv.log"
     log = log_path.read_text(encoding="utf-8", errors="replace") if log_path.exists() else ""
 
     frames_dir = cwd / "frames"
     out = MpvRun(result=result, dir=cwd, log=log, frames_dir=frames_dir)
     out.extra = {"source": str(source), "frames_requested": frames, "scale": scale}
+    vram = vpy.vram_summary(vpy.read_vram(cwd))
+    if vram:
+        summary = {k: v for k, v in vram.items() if k != "rows"}
+        out.extra["vram"] = summary
+        result.extra["vram"] = summary  # 落进 meta.json
     out.save()
     return out
 

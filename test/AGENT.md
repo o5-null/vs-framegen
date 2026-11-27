@@ -72,3 +72,27 @@
   VS 版本/python/可执行文件/cwd，用来区分「跑的是 stage 里的 python 还是 .venv」。
 - Windows 上 PowerShell 命令含 `;` 会被 shell 扫描器拒绝（`invalid-structure`），
   调试时把多语句拆成多次调用，或写成临时脚本再用 python 跑。
+
+## 内存与显存采样
+
+每条用例的产物里都带占用数据，分两条独立来源，互不替代：
+
+- **进程内存**：`lib/memory.py` 用 psapi `GetProcessMemoryInfo` 采工作集/私有字节，
+  `runner.run()` 起样，写 `mem.csv`（0.2s 一次）并把峰值塞进 `meta.json` 的 `memory`。
+  uv 建出来的 `python.exe` 只是**启动器**，5MB 左右；真正的解释器是它的子进程，
+  所以必须按进程树求和（`CreateToolhelp32Snapshot` 取父子关系），只监控 Popen 的 pid
+  会读到恒定的 5MB。`OpenProcess` 的 `restype` 必须声明成 `c_void_p`，否则 64 位句柄被截断。
+- **显存**：只有两条路，且各有硬限制
+  1. OS 每进程计数器 `Win32_PerfFormattedData_GPUPerformanceCounters_GPUProcessMemory`
+     （实例名 `pid_<pid>_luid_...`）——只在进程**真的持有 GPU 分配**时列出该 pid，
+     短命进程、CUDA 进程常常查不到；一次查询约 1s，所以默认只对 GPU 用例开（`VFI_MEM_GPU=1` 全开）。
+  2. **VS 脚本内的 NVML 整卡采样**（默认开）：`lib/vpy.py` 的 `VRAM_DEF` 在 vpy 头部起
+     后台线程，`ctypes.WinDLL("nvml.dll")` → `nvmlInit_v2` → `nvmlDeviceGetHandleByIndex_v2(0)`
+     → `nvmlDeviceGetMemoryInfo`，每 0.25s 往 `vs.log` 写 `VRAM {"t_ms","used_mb","total_mb"}`。
+     `vpy.vram_summary()` 压成 `baseline_mb/peak_mb/delta_mb/samples` 进 `meta.json` 的 `vram`。
+- 三条实测硬结论：`nvidia-smi --query-compute-apps` 的 per-process 显存在 WDDM GeForce 上
+  恒为 `[N/A]`；`nvmlDeviceGetComputeRunningProcesses_v2` 在这台机器上返回 rc=7
+  （`INSUFFICIENT_SIZE`，count 有效但缓冲区不可靠）；**因此显存只能看整卡 used 的基线差**
+  （FrameGen 1080p/200 帧实测 delta ≈ 370MB），绝对峰值里混着别的进程。
+- 纯 `--vo=image` + 无 vpy 的场景没有 `vram` 字段（没有脚本就没有采样点）；要看显存就带一个
+  identity vpy，或走 `--vo=gpu` 让 OS 计数器有机会命中。

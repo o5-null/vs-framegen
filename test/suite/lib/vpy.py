@@ -91,11 +91,77 @@ def dump_props(clip):
 
 SET_OUTPUT = "clip.set_output()"
 
+#: 脚本内显存采样：直接问 NVML 要**整卡**占用，不依赖 OS 每进程计数器
+#: （Windows 性能计数器只在进程持有 GPU 分配时列出该 pid，短命/CUDA 进程常丢；
+#: nvidia-smi 的 per-process 字段在 WDDM GeForce 上恒为 [N/A]）。
+#: 逐行写 ``VRAM {"t_ms":..,"used_mb":..,"total_mb":..}``，事后算峰值与基线差。
+VRAM_DEF = '''
+VRAM_OFF = ("0", "false", "no", "off")
+
+
+def _vram_loop():
+    """后台线程按 ``VFI_VRAM_INTERVAL``（默认 0.25s）记录整卡显存。
+
+    失败一律静默：采样不该影响被测链路，也不该在旧驱动上抛错。
+    """
+    import ctypes
+    import threading
+    import time
+
+    if os.environ.get("VFI_VRAM", "1").strip().lower() in VRAM_OFF:
+        return
+    try:
+        _nvml = ctypes.WinDLL("nvml.dll")
+        if _nvml.nvmlInit_v2() != 0:
+            return
+        _dev = ctypes.c_void_p()
+        if _nvml.nvmlDeviceGetHandleByIndex_v2(0, ctypes.byref(_dev)) != 0:
+            return
+    except Exception:
+        return
+
+    class _Mem(ctypes.Structure):
+        _fields_ = [
+            ("total", ctypes.c_ulonglong),
+            ("free", ctypes.c_ulonglong),
+            ("used", ctypes.c_ulonglong),
+        ]
+
+    try:
+        interval = float(os.environ.get("VFI_VRAM_INTERVAL", "0.25"))
+    except ValueError:
+        interval = 0.25
+    info = _Mem()
+    start = time.perf_counter()
+
+    def _run():
+        while True:
+            try:
+                if _nvml.nvmlDeviceGetMemoryInfo(_dev, ctypes.byref(info)) != 0:
+                    return
+                row = {
+                    "t_ms": int((time.perf_counter() - start) * 1000),
+                    "used_mb": round(info.used / 1048576.0, 1),
+                    "total_mb": round(info.total / 1048576.0, 1),
+                }
+                _LOG.write("VRAM " + json.dumps(row) + "\\n")
+            except Exception:
+                return
+            time.sleep(interval)
+
+    threading.Thread(target=_run, name="vfi-vram", daemon=True).start()
+
+
+_vram_loop()
+'''
+
+_VRAM_RE = re.compile(r"^VRAM (\{.*\})$", re.MULTILINE)
+
 _FPS_RE = re.compile(r"^FPS:\s*(\d+)/(\d+)", re.MULTILINE)
 
 
 def header() -> str:
-    return HEADER_CORE + PROPS_DEF.format(names=list(PROP_NAMES))
+    return HEADER_CORE + PROPS_DEF.format(names=list(PROP_NAMES)) + VRAM_DEF
 
 
 def render(body: str, *, props: bool = False) -> str:
@@ -127,6 +193,7 @@ def run_vspipe(
     props_json: str | None = None,
     timeout: float = 300.0,
     extra: list[str] | None = None,
+    gpu: bool | None = None,
 ) -> Result:
     """无头 VS 检查：info 只读元数据，否则把帧请求一遍但不输出（``--``）。
 
@@ -146,7 +213,7 @@ def run_vspipe(
     argv.append(str(script))
     if not info:
         argv.append("--")  # 只请求帧，不产生输出
-    return run(argv, cwd=cwd, timeout=timeout)
+    return run(argv, cwd=cwd, timeout=timeout, gpu=gpu)
 
 
 def parse_info(text: str) -> dict:
@@ -216,3 +283,37 @@ def read_info(cwd: Path) -> dict:
         return json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
         return {}
+
+
+def read_vram(cwd: Path) -> list[dict]:
+    """读脚本里 NVML 采到的整卡显存序列（``VRAM {...}`` 行）。"""
+    rows: list[dict] = []
+    for match in _VRAM_RE.finditer(read_vs_log(cwd)):
+        try:
+            rows.append(json.loads(match.group(1)))
+        except json.JSONDecodeError:
+            continue
+    return rows
+
+
+def vram_summary(rows: list[dict]) -> dict:
+    """把显存序列压成「基线 / 峰值 / 增量」。
+
+    整卡占用包含其它程序，所以看的是**本次运行期间抬升了多少**（``delta_mb``），
+    而不是绝对峰值。
+    """
+    if not rows:
+        return {}
+    used = [r["used_mb"] for r in rows if "used_mb" in r]
+    if not used:
+        return {}
+    base = used[0]
+    peak = max(used)
+    return {
+        "baseline_mb": round(base, 1),
+        "peak_mb": round(peak, 1),
+        "delta_mb": round(peak - base, 1),
+        "total_mb": rows[0].get("total_mb"),
+        "samples": len(used),
+        "rows": rows,
+    }

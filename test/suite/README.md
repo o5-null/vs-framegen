@@ -59,11 +59,19 @@ test\suite\run.ps1 -Case test_30   # 只跑匹配的文件名
 mpv.log        mpv 的 --log-file
 frames\        00000001.png …（vo=image 逐帧输出）
 script.vpy     该场景实际喂给 VS 的脚本
-vs.log         vpy 里 core.add_log_handler 收到的日志
+vs.log         vpy 里 core.add_log_handler 收到的日志（含 VRAM {...} 采样行）
 vs_info.json   VS/python/可执行文件/cwd 现场
 props.json|PROPS 行   逐帧关键属性（_Duration*/_Matrix/_SceneChange* …）
+mem.csv        进程内存/显存时间序列（t_s,procs,wset_mb,private_mb,gpu_*_mb）
 stdout.log / stderr.log / argv.txt / meta.json   子进程现场
 ```
+
+`meta.json` 里有两块占用摘要：
+
+- `memory`：`peak_wset_mb` / `peak_private_mb` / `peak_gpu_dedicated_mb` / `peak_gpu_shared_mb`
+  / `procs`，来自 OS（工作集按**进程树**求和；`uv` 的 `python.exe` 只是启动器）。
+- `vram`：`baseline_mb` / `peak_mb` / `delta_mb` / `total_mb` / `samples`，来自 VS 脚本内的
+  NVML 整卡采样。`delta_mb` 才是本次运行抬升的显存；绝对峰值包含别的进程。
 
 判失败时先看 `mpv.log` 里的 `[f]`/`[e]` 行与 `vs.log`；两者都在用例目录里。
 
@@ -80,6 +88,11 @@ stdout.log / stderr.log / argv.txt / meta.json   子进程现场
 | `VFI_PLAYKIT` | 指定 mpv-playkit 的 stage 目录（不指就从 `mpv-playkit\dist\stage` / `repos\dist\mpv-playkit-pre-*` 里挑最新） |
 | `VFI_ARTIFACTS` | 产物根目录 |
 | `VFI_DUMP` | `1` 时若 PATH 上有 procdump，崩溃用例自动抓 dump |
+| `VFI_MEM` | `0` 关闭进程内存采样（默认开，0.2s 一次） |
+| `VFI_MEM_INTERVAL` | 内存采样间隔秒数（默认 `0.2`） |
+| `VFI_MEM_GPU` | `1` 时对**所有**子进程开 OS 每进程显存采样（默认只对 GPU 用例开；每条多花 ~1s） |
+| `VFI_VRAM` | `0` 关闭 VS 脚本内的整卡显存采样（默认开） |
+| `VFI_VRAM_INTERVAL` | 整卡显存采样间隔秒数（默认 `0.25`） |
 
 套件不写死绝对路径：所有外部依赖都走上面这张表 + 相对仓库根的推导，所以
 mpv-playkit 侧（`..\mpv-playkit`）可以用 `VFI_PLAYKIT=<stage>` 复用它验证打包产物。
@@ -87,10 +100,11 @@ mpv-playkit 侧（`..\mpv-playkit`）可以用 `VFI_PLAYKIT=<stage>` 复用它�
 ## 目录
 
 ```
-lib/paths.py    外部依赖定位（全部带 env 覆盖）
-lib/runner.py   子进程封装（超时/退出码/日志落盘/可选 procdump）
-lib/mpv.py      mpv 命令行 + 日志解析（converted / fps / fatal / 落盘帧）
-lib/vpy.py      生成 vpy（日志钩子 + 逐帧属性 dump）与 vspipe 调用
+lib/paths.py     外部依赖定位（全部带 env 覆盖）
+lib/runner.py    子进程封装（超时/退出码/日志落盘/可选 procdump/内存采样）
+lib/memory.py    进程树内存（psapi）与每进程显存（性能计数器）采样
+lib/mpv.py       mpv 命令行 + 日志解析（converted / fps / fatal / 落盘帧）
+lib/vpy.py       生成 vpy（日志钩子 + 逐帧属性 dump + NVML 显存采样）与 vspipe 调用
 lib/frames.py   PNG 序列 → numpy（借 ffmpeg 解码，支持 8/16bit）
 lib/metrics.py  亮度/通道均值/重复帧/黑帧/闪烁指标
 lib/case.py     一条用例的目录与运行句柄（Case / Run）

@@ -80,6 +80,9 @@ uv pip install --python .venv\Scripts\python.exe vapoursynth==74 numpy vsrepo
 
 - 覆盖：环境自检 / VS 无头出帧与插件 / mpv 落盘与转换 / 色彩矩阵与位深 / 重复帧与黑帧 /
   playkit stage / 吞吐 / vdlssg FrameGen。判定全部是数值（PNG 序列 → numpy），不靠人眼。
+- 每个子进程都带占用采样：`mem.csv` 是进程树内存（0.2s）与可选每进程显存，`meta.json` 的
+  `memory`/`vram` 是峰值摘要；显存以 VS 脚本内的 NVML 整卡采样为准（`delta_mb` 才是本次抬升，
+  `nvidia-smi` 的 per-process 在 WDDM 上恒 `[N/A]`）。细节见 `test\AGENT.md`。
 - `test\` 根目录的历史一次性脚本只留档：`docs\*.md` 按 `test\<script>.py` 引用它们，
   不要移动或改名，也不要再往里加东西；规则写在 `test\AGENT.md`。
 - 详细跑法、产物布局、环境变量（`VFI_MPV`/`VFI_PLAYKIT`/`VFI_DUMP` …）见

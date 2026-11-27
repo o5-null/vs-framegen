@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import shutil
 from pathlib import Path
@@ -75,8 +76,17 @@ class Run:
     def vspipe(self, script: Path | None = None, **kwargs) -> Result:
         if self.case.vspipe_exe is None:
             raise AssertionError("找不到 vspipe.exe（装到 .venv 或设 VFI_VSPIPE）")
-        return vpylib.run_vspipe(self.case.vspipe_exe, script or (self.dir / "script.vpy"),
-                                 cwd=self.dir, **kwargs)
+        result = vpylib.run_vspipe(self.case.vspipe_exe, script or (self.dir / "script.vpy"),
+                                   cwd=self.dir, **kwargs)
+        self._attach_vram(result)
+        result.save(self.dir)
+        return result
+
+    def _attach_vram(self, result: Result) -> None:
+        """把 VS 脚本自采的整卡显存序列压成摘要塞进 meta。"""
+        summary = vpylib.vram_summary(vpylib.read_vram(self.dir))
+        if summary:
+            result.extra["vram"] = {k: v for k, v in summary.items() if k != "rows"}
 
     # ---- 产物 ----
     def frames(self, *, limit: int | None = None):
@@ -90,6 +100,17 @@ class Run:
 
     def vs_info(self) -> dict:
         return vpylib.read_info(self.dir)
+
+    def meta(self) -> dict:
+        """最近一次落盘的 meta.json（含 memory / vram 摘要）。"""
+        path = self.dir / "meta.json"
+        if not path.exists():
+            return {}
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def vram(self) -> dict:
+        """VS 脚本内的显存采样摘要（基线/峰值/增量），无采样时为空。"""
+        return vpylib.vram_summary(vpylib.read_vram(self.dir))
 
     def copy(self, src: Path, name: str | None = None) -> Path:
         dst = self.dir / (name or Path(src).name)
