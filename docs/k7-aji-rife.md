@@ -78,11 +78,14 @@ core.vsaji.Rife(clip, conf, rife_model_dir, factor=2, device=0,
 - 输出帧数：`(源帧数-1) * factor + 1`（30 帧 2 倍 = 59 帧）。
 - 实例内部一把锁串行：VS 并行取帧不会撞同一个 CUcontext。
 
-同一个插件还注册了超分滤镜（k7 侧暂无封装）：
+同一个插件还注册了两个 1:1 滤镜：`Upscale`（超分/时序）与 `TemporalFix`（只做时序，链里必须有
+`chain_1_temporal_fix_model`，k7 封装分别是 `UPSCALE_AJI`/`TEMPORAL_FIX_AJI`）：
 
 ```python
 core.vsaji.Upscale(clip, conf, model_dir="", device=0, matrix=-1, range=-1,
                       lib="", fps=25.0, backend="")
+core.vsaji.TemporalFix(clip, conf, model_dir="", device=0, matrix=-1, range=-1,
+                          lib="", fps=25.0, backend="")
 ```
 
 conf 换成带超分链的模板（`chain_1_model_1_name` = ONNX 文件名，不含 `.onnx`），输出尺寸取链
@@ -122,12 +125,20 @@ chain_1_rife_model=<code>
 ## 5. k7 侧
 
 - `src/k7sfunc/mod_memc.py:1095-1217` `RIFE_AJI(input, model, ensemble, fps_in, fps_num,
-  fps_den, sc_mode, gpu)`：`_aji_runtime_dir()` 依次看 `AJI_DIR` → `Version()["aji"]` → 插件同级/
-  上级 `aji\` → `<包根>\vs-plugins\aji` → 生成/复用 conf → 调 `core.vsaji.Rife` →
-  `AssumeFPS(fps_in * factor)`；非整数倍率直接报错。
-- `PLAYKIT_MEMC` 也可以直接用：`memc_engine=aji`，顺序在 `rife_nv` 之后（`mod_playkit.py`）。
+  fps_den, sc_mode, gpu, backend="auto")`：`_aji_runtime_dir()` 依次看 `AJI_DIR` →
+  `Version()["aji"]` → 插件同级/上级 `aji\` → `<包根>\vs-plugins\aji` → 生成/复用 conf →
+  调 `core.vsaji.Rife` → `AssumeFPS(fps_in * factor)`；非整数倍率直接报错。
+- `UPSCALE_AJI(input, model="hd_perf", gpu, backend)`：短名（`hd_perf`/`hd_bal`/
+  `hd_perf_sharp`/`hd_bal_sharp`/`sd`）或完整 ONNX 名 → 写 `conf\upscale_<name>.conf` →
+  `core.vsaji.Upscale`；模型在 `aji\models\`。
+- `TEMPORAL_FIX_AJI(input, model="s1", scene_threshold=0.150, before_upscale=False, gpu,
+  backend)`：短名 `s1`/`s2`/`s3` → `conf\tfix_<name>.conf` → `core.vsaji.TemporalFix`。
+  1 帧进 1 帧出、尺寸/帧率不变，因此随便叠：`TEMPORAL_FIX_AJI(RIFE_NV(...))`、
+  `TEMPORAL_FIX_AJI(UPSCALE_AJI(...))` 都成立。
+- `PLAYKIT_MEMC(..., temporal_fix="off")`：插帧完成后按 `s1/s2/s3` 自动叠时序修复；
+  `PLAYKIT_TEMPORAL_FIX(input, model, scene_threshold, gpu)` 是失败即原样返回的安全封装。
 - `mpv/portable_config/vs/MEMC_RIFE_AJI.vpy`：`_here` 递归找 `vs-plugins`、`AJI_*` 环境变量。
-- `FORK.md:31` 一行改动说明；`doc/Windows.md:582` 起是用户文档。
+- `FORK.md:31` 一行改动说明；`doc/Windows.md:585` 起是用户文档。
 
 ## 6. 限制
 
@@ -135,7 +146,8 @@ chain_1_rife_model=<code>
   路径这里做不到。1080p 一次往返约 9 MB，相对推理可忽略。
 - 只支持 4:2:0 8/10bit；其他格式先转。
 - `Rife` 只吃 RIFE-only conf；带超分链或 `chain_1_temporal_fix_model` 的 conf 请改用同插件的
-  `Upscale`（k7 暂无封装）。`Rife` 没有 `model_dir`，链里其它模型找不到文件时整条链不激活。
+  `Upscale`（k7 封装：`UPSCALE_AJI`）。`Rife` 没有 `model_dir`，链里其它模型找不到文件时
+  整条链不激活。
 - `aji_trt.dll` 仍链接 nvinfer（CUDA 原生内核与 TensorRT 后端在**同一个** DLL 里），TensorRT
   运行时必须在 `trt\` 里（`aji-runtime.json` 指路，别手写 PATH）；缺 `nvinfer_11.dll` 时整个
   后端加载失败（error 126），即使 conf 只走原生内核。`Version()["missing"]` 会提前指出。
